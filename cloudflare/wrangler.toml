@@ -1,0 +1,28 @@
+name = "keiba-vision-ai"
+main = "src/worker.ts"
+compatibility_date = "2024-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static assets serving (serves the Apple Liquid Glass UI directly from Cloudflare Edge)
+[assets]
+directory = "../src/main/resources/static"
+binding = "ASSETS"
+
+# Cloudflare D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "keiba-vision-db"
+database_id = "your-d1-database-id-here"
+
+# Cloudflare KV for high-speed edge caching (weather, odds, predictions)
+[[kv_namespaces]]
+binding = "KEIBA_CACHE"
+id = "your-kv-namespace-id-here"
+
+# Environment Variables (Configure in Cloudflare Dashboard or .dev.vars)
+[vars]
+ENVIRONMENT = "production"
+# GITHUB_CLIENT_ID = "..."
+# GITHUB_CLIENT_SECRET = "..."
+# GOOGLE_CLIENT_ID = "..."
+# GOOGLE_CLIENT_SECRET = "..."

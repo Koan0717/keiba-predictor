@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keiba Vision Pro | Apple Glass Edition</title>
+  <meta name="color-scheme" content="light dark">
+  <script>
+    // 描画前にテーマを決める (保存値 → OS設定) ことで白→黒のチラつきを防ぐ
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem("keiba_theme"); } catch (e) {}
+      if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏇</text></svg>">
+</head>
+<body>
+
+  <!-- 起動スプラッシュ: 光の粒が走り、リングが広がり、最後に円形に「開いて」アプリが現れる -->
+  <div class="splash" id="splash" role="status" aria-label="起動中">
+    <canvas class="splash-canvas" id="splash-canvas"></canvas>
+    <div class="splash-glow"></div>
+    <div class="splash-ring"></div>
+    <div class="splash-ring"></div>
+    <div class="splash-ring"></div>
+    <div class="splash-core">
+      <div class="splash-logo">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <defs>
+            <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#7dd3fc"/><stop offset=".5" stop-color="#818cf8"/><stop offset="1" stop-color="#f0abfc"/>
+            </linearGradient>
+          </defs>
+          <!-- 蹄鉄 -->
+          <path class="logo-shoe" d="M30 26 C18 48 18 78 36 94 C48 104 72 104 84 94 C102 78 102 48 90 26" />
+          <g class="logo-nails"><circle cx="27" cy="52" r="3"/><circle cx="30" cy="72" r="3"/><circle cx="93" cy="52" r="3"/><circle cx="90" cy="72" r="3"/></g>
+          <text class="logo-k" x="60" y="76" text-anchor="middle">K</text>
+        </svg>
+      </div>
+      <h1 class="splash-title" id="splash-title">Keiba Vision</h1>
+      <p class="splash-sub">Kotlin · Zig · Odin · WebAssembly</p>
+      <ul class="splash-boot" id="splash-boot">
+        <li data-boot="kotlin">Kotlin API</li>
+        <li data-boot="c">C Wasm 物理</li>
+        <li data-boot="zig">Zig モンテカルロ</li>
+        <li data-boot="odin">Odin 血統計算</li>
+      </ul>
+      <div class="splash-progress"><span id="splash-bar"></span></div>
+    </div>
+    <button class="splash-skip" id="splash-skip">スキップ</button>
+  </div>
+
+  <!-- ガラスの向こうで揺れる光 (グラスモーフィズムの「透け感」を作る背景) -->
+  <div class="ambient" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+  <div class="app-layout">
+
+    <!-- Apple Style Frosted Glass Sidebar Navigation -->
+    <aside class="glass-sidebar" aria-label="サイドメニュー">
+      <div class="sidebar-header">
+        <div class="brand-icon-box">🏇</div>
+        <div class="brand-name-box">
+          <h1>Keiba Vision</h1>
+          <span>Pro Edition</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" id="sidebar-nav">
+        <span class="nav-indicator" id="nav-indicator" aria-hidden="true"></span>
+        <div class="nav-category-label">メイン機能</div>
+        <button class="sidebar-tab-btn active" data-view="dashboard">
+          <span class="tab-icon">📊</span>
+          <span>レース予想・分析</span>
+        </button>
+        <button class="sidebar-tab-btn" data-view="encyclopedia">
+          <span class="tab-icon">📖</span>
+          <span>競走馬名鑑</span>
+        </button>
+        <button class="sidebar-tab-btn" data-view="breeds">
+          <span class="tab-icon">🐴</span>
+          <span>馬の種類・毛色</span>
+        </button>
+        <button class="sidebar-tab-btn" data-view="pedigree">
+          <span class="tab-icon">🧬</span>
+          <span>血統・系統図</span>
+        </button>
+        <button class="sidebar-tab-btn" data-view="courses">
+          <span class="tab-icon">🏟️</span>
+          <span>競馬場コース図</span>
+        </button>
+
+        <div class="nav-category-label" style="margin-top: 0.5rem;">ツール</div>
+        <button class="sidebar-tab-btn" data-view="simulator">
+          <span class="tab-icon">🎯</span>
+          <span>買い目シミュレータ</span>
+        </button>
+        <button class="sidebar-tab-btn" data-view="settings">
+          <span class="tab-icon">⚙️</span>
+          <span>システム & エンジン</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="theme-toggle-row">
+          <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-secondary);">外観モード</span>
+          <button class="theme-toggle-btn" id="theme-toggle-btn" aria-label="ダーク / ライトモード切り替え">
+            <span class="theme-switch"><span class="theme-knob" id="theme-icon">🌙</span></span>
+            <span id="theme-text">ダーク</span>
+          </button>
+        </div>
+        <div class="wasm-status-pill">
+          <span class="wasm-dot"></span>
+          <span id="wasm-engine-label">エンジン読込中…</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-wrapper">
+
+      <!-- Top Navigation Bar -->
+      <header class="top-navbar">
+        <!-- Race Selector (Visible on Dashboard) -->
+        <div class="race-picker-tabs" id="race-tabs-bar">
+          <button class="race-btn active" data-race="arima-2026">有馬記念 (G1)</button>
+          <button class="race-btn" data-race="derby-2026">日本ダービー (G1)</button>
+          <button class="race-btn" data-race="jc-2026">ジャパンカップ (G1)</button>
+        </div>
+
+        <!-- Auth Section -->
+        <div id="auth-container">
+          <button id="open-login-btn" class="race-btn active" style="padding: 0.45rem 1.1rem;">
+            <span>✨ ログイン</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- ====================================================================
+           VIEW 1: DASHBOARD (レース予想・分析)
+           ==================================================================== -->
+      <section id="view-dashboard" class="view-section active">
+
+        <!-- Race Hero Card -->
+        <div class="glass-panel race-hero-layout">
+          <div>
+            <div style="display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.6rem;">
+              <span class="grade-badge-solid" id="race-grade">G1</span>
+              <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);" id="race-track">中山競馬場</span>
+              <span style="font-size: 0.8rem; color: var(--text-tertiary);" id="race-course-info">芝 2500m (右・内)</span>
+              <span style="font-size: 0.8rem; color: var(--color-primary); font-weight: 700;" id="race-time">発走 15:25</span>
+            </div>
+            <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.25rem;" id="race-title">有馬記念 (グランプリ)</h2>
+            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;" id="race-subtitle">第69回 暮れの大一番・ドリームレース</p>
+
+            <div style="display: flex; gap: 1.5rem; font-size: 0.85rem;">
+              <div>🏆 1着賞金: <strong id="race-prize" style="font-family: var(--font-mono);">5億円</strong></div>
+              <div>📊 出走頭数: <strong id="horse-count">16頭</strong></div>
+              <div>⚡ 演算: <strong style="color: var(--color-primary);">Wasm + Kotlin</strong></div>
+            </div>
+          </div>
+
+          <!-- Weather Box (Open-Meteo Live) -->
+          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border-subtle);">
+            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; font-weight: 700; margin-bottom: 0.5rem;">
+              <span style="color: var(--text-secondary);">現地気象 (Open-Meteo)</span>
+              <span style="color: var(--status-success);" id="weather-status-badge">● LIVE 連動中</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+              <div style="font-size: 2.2rem;" id="weather-icon">☀️</div>
+              <div>
+                <div style="font-size: 1.6rem; font-weight: 800; font-family: var(--font-mono);" id="weather-temp">16.4°C</div>
+                <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);" id="weather-desc">快晴・良馬場</div>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-tertiary);">
+              <span>風速: <strong id="weather-wind">12 km/h</strong></span>
+              <span>降水: <strong id="weather-rain">0.0 mm</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Wasm Acceleration Track Position Diagram -->
+        <div class="glass-panel" style="padding: 1.25rem 1.75rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 1.05rem; font-weight: 700;">🏇 Wasm 直線展開・スパート物理シミュレーター</h3>
+            <span style="font-size: 0.75rem; color: var(--text-tertiary);">第4コーナーから直線への隊列予想 (Wasm 60fps)</span>
+          </div>
+          <div class="track-diagram-box" id="sim-track">
+            <div class="finish-label">GOAL</div>
+            <div class="finish-line"></div>
+            <!-- Dynamic Runners -->
+          </div>
+        </div>
+
+        <!-- Zig Monte Carlo -->
+        <div class="glass-panel">
+          <div class="panel-head">
+            <div>
+              <h3 style="font-size: 1.05rem; font-weight: 700;">🎲 Zig モンテカルロ・シミュレーション</h3>
+              <p class="panel-note">同じレースを <strong>10万回</strong> 走らせて「何回勝ったか」を数えた勝率です (Zig → WebAssembly で計算)。</p>
+            </div>
+            <div class="seg" id="mc-pace" role="radiogroup" aria-label="想定ペース">
+              <button data-pace="0.8" role="radio">スロー</button>
+              <button data-pace="1.0" role="radio" class="active">ミドル</button>
+              <button data-pace="1.2" role="radio">ハイ</button>
+            </div>
+          </div>
+          <div class="mc-bars" id="mc-bars"></div>
+          <div class="panel-note" id="mc-meta" style="margin-top: .75rem;"></div>
+        </div>
+
+        <!-- Predictions & Betting Strategy Columns -->
+        <div class="two-col">
+
+          <!-- Top Picks -->
+          <div class="glass-panel" style="margin-bottom: 0;">
+            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;">注目推奨馬 (印・総合指数)</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.85rem;" id="top-picks-container">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+
+          <!-- Betting Strategy -->
+          <div class="glass-panel" style="margin-bottom: 0;">
+            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;">推奨買い目・資金配分</h3>
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;" id="bet-list-container">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Full Gate Table -->
+        <div class="glass-panel">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+            <h3 style="font-size: 1.15rem; font-weight: 700;">出馬表・詳細指数マトリクス</h3>
+            <div style="display: flex; gap: 0.4rem;" id="table-filter-group">
+              <button class="race-btn active" data-filter="all">馬番順</button>
+              <button class="race-btn" data-filter="ai-score">総合指数順</button>
+              <button class="race-btn" data-filter="odds">人気順</button>
+              <button class="race-btn" data-filter="ev">期待値(穴)</button>
+            </div>
+          </div>
+
+          <div class="data-table-container">
+            <table class="modern-table">
+              <thead>
+                <tr>
+                  <th style="width: 36px; text-align: center;">★</th>
+                  <th style="width: 50px; text-align: center;">枠/番</th>
+                  <th style="width: 44px; text-align: center;">印</th>
+                  <th>馬名 / 父・母父</th>
+                  <th>性齢/斤量</th>
+                  <th>騎手/厩舎</th>
+                  <th>単勝オッズ</th>
+                  <th>指数</th>
+                  <th>脚質</th>
+                  <th>調教</th>
+                  <th style="width: 140px;">総合評価</th>
+                </tr>
+              </thead>
+              <tbody id="horses-table-body">
+                <!-- Dynamic Rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ====================================================================
+           VIEW 2: HORSE ENCYCLOPEDIA (競走馬名鑑)
+           ==================================================================== -->
+      <section id="view-encyclopedia" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">競走馬名鑑 (Legendary Horses)</h2>
+          <p class="view-subtitle">競馬史にその名を刻んだ歴史的名馬たちのステータス、戦績、能力レーダー図</p>
+          <input type="search" class="sim-input search-input" id="horse-search" placeholder="🔍 馬名・父・勝ち鞍で検索 (例: 有馬記念)" aria-label="名鑑を検索">
+        </div>
+        <div class="horse-grid" id="encyclopedia-grid">
+          <!-- Loaded from /api/encyclopedia/horses -->
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           VIEW: BREEDS & COAT COLORS (馬の種類・毛色)
+           ==================================================================== -->
+      <section id="view-breeds" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">馬の種類 & 毛色図鑑</h2>
+          <p class="view-subtitle">競走馬だけじゃない。品種ごとの体格の違いと、JRA公式の8つの毛色を図で見比べよう</p>
+        </div>
+        <div class="glass-panel">
+          <h3 class="panel-title">📏 体高くらべ (人間 170cm と比較)</h3>
+          <div id="breed-size-chart" class="size-chart"></div>
+        </div>
+        <div class="horse-grid" id="breed-grid"></div>
+        <div class="view-header" style="margin-top: 1rem;">
+          <h2 class="view-title" style="font-size: 1.35rem;">🎨 JRA 公式 8 毛色</h2>
+          <p class="view-subtitle">体の色と、たてがみ・尾の色の組み合わせで決まります</p>
+        </div>
+        <div class="coat-grid" id="coat-grid"></div>
+      </section>
+
+      <!-- ====================================================================
+           VIEW 3: PEDIGREE LINEAGES (血統・系統図)
+           ==================================================================== -->
+      <section id="view-pedigree" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">血統系統図 & ニックス解説 (Pedigree)</h2>
+          <p class="view-subtitle">日本の芝・ダートを席巻する主要父系と後継種牡馬、コース適性の相関</p>
+        </div>
+        <div class="glass-panel odin-calc">
+          <div>
+            <h3 class="panel-title">🧬 Odin 血量・近交係数計算機</h3>
+            <p class="panel-note">同じ祖先が「父方の何代目」と「母方の何代目」に出てくるか (クロス) を入れると、その祖先の血が何%入っているかを Odin (WebAssembly) が計算します。例: <code>3×4</code> は有名な「奇跡の血量 18.75%」。</p>
+            <div class="odin-inputs">
+              <label>父方 <input type="number" min="1" max="12" value="3" class="sim-input" id="odin-g1"> 代目</label>
+              <span>×</span>
+              <label>母方 <input type="number" min="1" max="12" value="4" class="sim-input" id="odin-g2"> 代目</label>
+            </div>
+          </div>
+          <div class="odin-result" id="odin-result" aria-live="polite"></div>
+        </div>
+        <div class="glass-panel">
+          <h3 class="panel-title">🌳 主要父系の系統図</h3>
+          <div class="lineage-tree" id="lineage-tree"></div>
+        </div>
+        <div class="pedigree-grid" id="pedigree-grid">
+          <!-- Loaded from /api/encyclopedia/pedigree -->
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           VIEW 4: RACECOURSE GUIDES (競馬場立体コース図)
+           ==================================================================== -->
+      <section id="view-courses" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">競馬場ガイド & コース立体構造 (Courses)</h2>
+          <p class="view-subtitle">東京・中山・京都・阪神の高低差、最後の直線の長さ、坂の攻略ポイント</p>
+        </div>
+        <div class="course-grid" id="course-grid">
+          <!-- Loaded from /api/encyclopedia/courses -->
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           VIEW 5: BET SIMULATOR (買い目シミュレータ)
+           ==================================================================== -->
+      <section id="view-simulator" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">買い目・収支シミュレーター (Bet Simulator)</h2>
+          <p class="view-subtitle">オッズと購入金額から的中払戻金・回収率をリアルタイムに計算</p>
+        </div>
+
+        <div class="glass-panel simulator-layout">
+          <div>
+            <div class="sim-input-group">
+              <label>券種を選択</label>
+              <select class="sim-input" id="sim-type-select">
+                <option value="単勝">単勝</option>
+                <option value="複勝">複勝</option>
+                <option value="馬連">馬連</option>
+                <option value="ワイド">ワイド</option>
+                <option value="3連複">3連複</option>
+                <option value="3連単">3連単</option>
+              </select>
+            </div>
+
+            <div class="sim-input-group">
+              <label>オッズ (倍率)</label>
+              <input type="number" step="0.1" value="8.5" class="sim-input" id="sim-odds-input">
+            </div>
+
+            <div class="sim-input-group">
+              <label>購入金額 (円)</label>
+              <input type="number" step="100" value="2000" class="sim-input" id="sim-amount-input">
+            </div>
+
+            <button class="race-btn active" style="width: 100%; padding: 0.75rem;" id="sim-calculate-btn">
+              ⚡ 払戻金をシミュレーション
+            </button>
+          </div>
+
+          <div class="sim-result-card">
+            <span style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary);">的中時の想定払戻金</span>
+            <div class="sim-payout-num" id="sim-payout-display">¥17,000</div>
+            <div style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">
+              回収率: <strong id="sim-return-rate" style="color: var(--status-success); font-size: 1.2rem;">850%</strong> (利益: +¥15,000)
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-tertiary); line-height: 1.4;">
+              ※ 資金配分機能と併用することで、レースごとの期待値を最大化し、リスクを最小限に抑えた購入計画を策定できます。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ====================================================================
+           VIEW 6: SETTINGS & NATIVE ARCHITECTURE (システム状態)
+           ==================================================================== -->
+      <section id="view-settings" class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">システム情報 & ネイティブ連携状態</h2>
+          <p class="view-subtitle">Chimera Linux musl / Kotlin / WebAssembly / Zig / Odin / Cloudflare の稼働状態</p>
+        </div>
+
+        <div class="glass-panel" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ WebAssembly (Wasm)</div>
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+              <code>native/wasm/keiba_physics.c</code> を clang で wasm 化。直線スパートの位置計算。
+            </p>
+            <span class="engine-status" data-engine="c">確認中…</span>
+          </div>
+
+          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ Zig モンテカルロコア</div>
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+              <code>native/zig/montecarlo.zig</code>。レースを10万回走らせる勝率シミュレーション。
+            </p>
+            <span class="engine-status" data-engine="zig">確認中…</span>
+          </div>
+
+          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ Odin 血統解析コア</div>
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+              <code>native/odin/pedigree.odin</code>。クロスの血量・Wright 近交係数の計算。
+            </p>
+            <span class="engine-status" data-engine="odin">確認中…</span>
+          </div>
+
+          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">☁️ Cloudflare Edge & D1</div>
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+              Workers + D1 + KV + Static Assets による超高速エッジ配信環境。
+            </p>
+            <span style="font-size: 0.75rem; color: var(--color-primary); font-family: var(--font-mono);">● wrangler.toml & worker.ts Ready</span>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <!-- Login Modal -->
+  <div class="dialog-overlay" id="login-modal" role="dialog" aria-modal="true">
+    <div class="dialog-box">
+      <button class="dialog-close" id="close-login-btn">&times;</button>
+      <h3 style="font-size: 1.3rem; font-weight: 800; text-align: center;">Keiba Vision サインイン</h3>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-top: 0.25rem;">
+        お気に入り馬や予想メモがクラウドで保存・同期されます
+      </p>
+
+      <div class="oauth-vertical-stack">
+        <button class="oauth-entry-btn btn-auth-github" id="login-github-btn">
+          <span>GitHub アカウントでログイン</span>
+        </button>
+        <button class="oauth-entry-btn btn-auth-google" id="login-google-btn">
+          <span>Google アカウントでログイン</span>
+        </button>
+        <button class="oauth-entry-btn btn-auth-demo" id="login-demo-btn">
+          <span>🚀 1クリック デモログイン</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Note Modal -->
+  <div class="dialog-overlay" id="note-modal" role="dialog" aria-modal="true">
+    <div class="dialog-box">
+      <button class="dialog-close" id="close-note-btn">&times;</button>
+      <h3 style="font-size: 1.2rem; font-weight: 800;">📝 予想メモ & 買い目記録</h3>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0.25rem 0 0.85rem;" id="note-race-title"></p>
+      <textarea id="note-textarea" rows="5" style="width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.75rem; font-family: inherit; font-size: 0.85rem; margin-bottom: 1rem; resize: vertical; background: var(--bg-input); color: var(--text-primary);" placeholder="パドック気配、馬場適性の考察、購入買い目を記入..."></textarea>
+      <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+        <button class="race-btn" id="cancel-note-btn" style="border: 1px solid var(--border-strong);">キャンセル</button>
+        <button class="race-btn active" id="save-note-btn">保存する</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

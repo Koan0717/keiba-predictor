@@ -1,0 +1,197 @@
+package com.example.keiba.model
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+enum class CourseType {
+    TURF, // 芝
+    DIRT  // ダート
+}
+
+@Serializable
+enum class TrackCondition {
+    FIRM,     // 良
+    GOOD,     // 稍重
+    YIELDING, // 重
+    SOFT      // 不良
+}
+
+@Serializable
+enum class RunningStyle {
+    NIGE,    // 逃げ
+    SENKO,   // 先行
+    SASHI,   // 差し
+    OIKOMI   // 追込
+}
+
+@Serializable
+data class Horse(
+    val horseNumber: Int,
+    val postPosition: Int, // 枠番 (1-8)
+    val name: String,
+    val sexAge: String,    // 牡4, 牝5, セン6 etc.
+    val weightCarry: Double, // 斤量 (58.0kg etc.)
+    val jockey: String,
+    val trainer: String,
+    val odds: Double,
+    val popularity: Int,
+    val recentRank: Int,
+    val speedIndex: Double, // スピード指数 (60.0 - 120.0)
+    val runningStyle: RunningStyle,
+    val sire: String,       // 父
+    val damSire: String,    // 母父
+    val horseWeight: Int,   // 馬体重 (kg)
+    val weightDiff: Int,    // 体重増減 (+2, -4 etc.)
+    val jockeyWinRate: Double, // 騎手勝率 (0.0 - 1.0)
+    val trainingScore: String  // 調教評価 (S, A+, A, B, C)
+)
+
+@Serializable
+data class WeatherInfo(
+    val location: String,
+    val temperatureC: Double,
+    val weatherDescription: String,
+    val weatherIcon: String,
+    val windSpeedKmh: Double,
+    val precipitationMm: Double,
+    val trackConditionEstimate: TrackCondition,
+    val isLive: Boolean = false
+)
+
+@Serializable
+data class PredictionScore(
+    val horseNumber: Int,
+    val horseName: String,
+    val mark: String,          // ◎, ◯, ▲, △, ☆
+    val totalScore: Double,     // 総合スコア (0.0 - 100.0)
+    val speedScore: Double,     // スピードスコア
+    val paceAdvantage: Double,  // 展開適合度
+    val pedigreeScore: Double,  // 血統適性
+    val jockeyScore: Double,    // 騎手相性
+    val conditionScore: Double, // 馬場適性
+    val winProbability: Double, // 予測勝率 (%)
+    val placeProbability: Double, // 予測複勝率 (%)
+    val expectedValueScore: Double, // オッズ妙味度 (回収期待値指数)
+    val comments: String        // AI寸評
+)
+
+@Serializable
+data class BetRecommendation(
+    val betType: String,      // 単勝, 複勝, 馬連, ワイド, 3連複, 3連単
+    val combination: String,  // 例: "9", "9 - 5", "9 - 5 - 1"
+    val oddsEstimate: Double,
+    val confidence: String,   // S, A, B, C
+    val allocationPercent: Int, // 資金配分 (%)
+    val reason: String
+)
+
+@Serializable
+data class Race(
+    val id: String,
+    val name: String,
+    val subtitle: String,
+    val raceNumber: Int,
+    val racecourse: String,     // 東京, 中山, 京都, 阪神 etc.
+    val courseType: CourseType,
+    val distanceMeters: Int,
+    val turnDirection: String,  // 右, 左, 直線
+    val condition: TrackCondition,
+    val grade: String,          // G1, G2, G3, OP
+    val postTime: String,       // 15:40 etc.
+    val prizeFirstYen: Long,    // 1着賞金
+    val horses: List<Horse>,
+    val weather: WeatherInfo? = null
+)
+
+@Serializable
+data class RaceAnalysis(
+    val race: Race,
+    val predictions: List<PredictionScore>,
+    val betRecommendations: List<BetRecommendation>,
+    val paceForecast: String,   // ハイペース, ミドルペース, スローペース
+    val paceComment: String
+)
+
+@Serializable
+data class UserProfile(
+    val id: String,
+    val name: String,
+    val email: String,
+    val avatarUrl: String,
+    val provider: String, // "github" | "google" | "demo"
+    val favoriteHorses: List<String> = emptyList(),
+    val notes: Map<String, String> = emptyMap() // raceId -> memo
+)
+
+@Serializable
+data class LegendaryHorse(
+    val id: String,
+    val name: String,
+    val kana: String,
+    val title: String,
+    val birthYear: Int,
+    val color: String,
+    val record: String, // e.g. 10戦8勝 (G1 6勝)
+    val totalEarnings: String, // e.g. 22億1,544万円
+    val sire: String,
+    val dam: String,
+    val majorWins: List<String>,
+    val description: String,
+    val iconEmoji: String,
+    val speedRadar: Int,
+    val staminaRadar: Int,
+    val powerRadar: Int,
+    val spiritRadar: Int,
+    val agilityRadar: Int
+)
+
+@Serializable
+data class PedigreeLineage(
+    val id: String,
+    val name: String,
+    val founder: String,
+    val keyStallions: List<String>,
+    val turfAptitude: String,
+    val dirtAptitude: String,
+    val distanceRange: String,
+    val characteristics: String,
+    val representativeHorses: List<String>
+)
+
+@Serializable
+data class RacecourseGuide(
+    val id: String,
+    val name: String,
+    val location: String,
+    val straightLengthMeters: Double,
+    val elevationDiffMeters: Double,
+    val slopeCharacteristic: String,
+    val keyFeature: String,
+    val courseDiagramAscii: String,
+    val turn: String, // "右" / "左"
+    val elevationProfile: List<Double> // 向こう正面→ゴールの高さ (m, 模式)
+)
+
+
+@Serializable
+data class HorseBreed(
+    val id: String,
+    val name: String,
+    val origin: String,
+    val heightCm: String,
+    val weightKg: String,
+    val use: String,
+    val description: String,
+    val bodyHex: String,
+    val build: Double // 体格の太さ (図の描画用 0.8=細身 〜 1.4=重種)
+)
+
+@Serializable
+data class CoatColor(
+    val name: String,
+    val reading: String,
+    val bodyHex: String,
+    val maneHex: String,
+    val description: String,
+    val famousHorse: String
+)

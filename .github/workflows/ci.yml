@@ -1,0 +1,50 @@
+# push / PR ごとにビルドとテストを実行し、v から始まるタグ (例: v1.0.0) を push すると
+# 「ダウンロードしてすぐ動く zip」を GitHub Releases に自動公開します。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  zig-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Zig モンテカルロの自己テスト
+        run: cd native/zig && zig test montecarlo.zig
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Kotlin ビルド & 配布用 zip 作成
+        run: chmod +x gradlew && ./gradlew build distZip --console=plain
+      - name: 起動して API が応答するか確認
+        run: |
+          NO_BROWSER=1 PORT=8080 ./gradlew run --console=plain &
+          for i in $(seq 1 60); do curl -sf localhost:8080/api/health && break; sleep 2; done
+          curl -sf localhost:8080/api/native/info
+          curl -sf localhost:8080/api/encyclopedia/breeds > /dev/null
+          curl -sf -o /dev/null -w "%{content_type}\n" localhost:8080/static/wasm/montecarlo.wasm | grep -q application/wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keiba-predictor
+          path: build/distributions/*.zip
+      - name: Release を作成 (タグ push 時のみ)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/distributions/*.zip

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Keiba Vision AI
+Comment=Apple Liquid Glass Horse Racing AI Predictor
+Exec=/bin/sh -c "cd $(dirname %k) && ./run.sh"
+Icon=utilities-system-monitor
+Terminal=true
+Type=Application
+Categories=Game;Sports;Office;
+Keywords=keiba;horse;racing;ai;prediction;
+StartupNotify=true

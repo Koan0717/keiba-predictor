@@ -1,0 +1,22 @@
+# ビルド成果物
+build/
+.gradle/
+*.class
+*.o
+.zig-cache/
+zig-out/
+
+# 別プロジェクト (JetBrains の kotlin-desktop-toolkit のクローン。このアプリでは未使用)
+kotlin-desktop-toolkit/
+
+# Cloudflare
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/.dev.vars
+
+# エディタ / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
