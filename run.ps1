@@ -1,9 +1,9 @@
 ﻿# ==============================================================================
-# Keiba Vision AI — Windows PowerShell Launcher
+# Keiba Vision — 起動スクリプト (Windows PowerShell)
 # ==============================================================================
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "🏇 Keiba Vision AI (Apple Liquid Glass Edition)" -ForegroundColor Cyan
+Write-Host "Keiba Vision" -ForegroundColor Cyan
 Write-Host "Windows PowerShell Launcher" -ForegroundColor DarkCyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
@@ -19,7 +19,7 @@ $javaVer = java -version 2>&1 | Select-Object -First 1
 Write-Host "[OK] Detected: $javaVer" -ForegroundColor Green
 
 Write-Host "----------------------------------------------------------"
-Write-Host "🚀 サーバーを起動します (http://localhost:8080)" -ForegroundColor Green
+Write-Host "起動しています (http://localhost:8080)" -ForegroundColor Green
 Write-Host "ブラウザが自動的に開きます。停止は Ctrl + C です。"
 Write-Host "----------------------------------------------------------"
 

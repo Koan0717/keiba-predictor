@@ -88,8 +88,26 @@ export fn place_rate(i: u32) f32 {
     return @as(f32, @floatFromInt(places[i])) * 100.0 / @as(f32, @floatFromInt(runs));
 }
 
+var sample: [MAX_HORSES]f32 = @splat(0);
+
+/// 1 回だけレースを走らせ、各馬の「その日の出来」を記録する (3D シミュレーション用)。
+/// 大きいほど速い。着順は race_score() の降順。
+export fn race_once(count: u32, pace: f32, seed: u32) void {
+    const n = @min(count, MAX_HORSES);
+    rng = if (seed == 0) 0x9E3779B9 else seed;
+    for (0..n) |idx| {
+        const i: u32 = @intCast(idx);
+        sample[i] = (speed[i] / 100.0) * styleMultiplier(style[i], pace) * (0.85 + 0.15 * stamina[i]) + gaussianish() * 0.11;
+    }
+}
+
+export fn race_score(i: u32) f32 {
+    if (i >= MAX_HORSES) return 0;
+    return sample[i];
+}
+
 export fn engine_version() u32 {
-    return 2;
+    return 3;
 }
 
 // `zig test montecarlo.zig` で実行される自己チェック
@@ -108,4 +126,16 @@ test "strongest horse wins most and rates sum to 100" {
     try std.testing.expectApproxEqAbs(@as(f32, 100.0), total, 0.01);
     const placeTotal = place_rate(0) + place_rate(1) + place_rate(2) + place_rate(3);
     try std.testing.expectApproxEqAbs(@as(f32, 300.0), placeTotal, 0.01);
+}
+
+test "race_once is deterministic for a seed" {
+    const std = @import("std");
+    set_horse(0, 110, 0.8, 1);
+    set_horse(1, 105, 0.8, 2);
+    race_once(2, 1.0, 99);
+    const a = race_score(0);
+    race_once(2, 1.0, 99);
+    try std.testing.expectEqual(a, race_score(0));
+    race_once(2, 1.0, 100);
+    try std.testing.expect(a != race_score(0));
 }

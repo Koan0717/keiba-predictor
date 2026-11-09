@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title Keiba Vision AI (Apple Liquid Glass Edition)
+title Keiba Vision
 
 echo ==========================================================
-echo 🏇 Keiba Vision AI - Windows Launcher
+echo Keiba Vision
 echo ==========================================================
 
 where java >nul 2>&1
@@ -16,7 +16,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [OK] Java runtime detected.
-echo [INFO] Starting Keiba Vision AI Server...
+echo [INFO] Starting Keiba Vision...
 echo [INFO] Opening http://localhost:8080 in your default browser...
 echo.
 

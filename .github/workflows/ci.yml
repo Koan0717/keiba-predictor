@@ -30,7 +30,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Kotlin ビルド & 配布用 zip 作成
+      - name: Kotlin ビルド・テスト & 配布用 zip 作成
         run: chmod +x gradlew && ./gradlew build distZip --console=plain
       - name: 起動して API が応答するか確認
         run: |
@@ -38,6 +38,9 @@ jobs:
           for i in $(seq 1 60); do curl -sf localhost:8080/api/health && break; sleep 2; done
           curl -sf localhost:8080/api/native/info
           curl -sf localhost:8080/api/encyclopedia/breeds > /dev/null
+          curl -sf "localhost:8080/api/horses?limit=1" | grep -q '"total":'
+          curl -sf localhost:8080/api/courses | grep -q '"sapporo"'
+          curl -sf -o /dev/null localhost:8080/static/models/horse.glb
           curl -sf -o /dev/null -w "%{content_type}\n" localhost:8080/static/wasm/montecarlo.wasm | grep -q application/wasm
       - uses: actions/upload-artifact@v4
         with:

@@ -2,6 +2,11 @@ package com.example.keiba
 
 import com.example.keiba.service.AuthService
 import com.example.keiba.service.RaceService
+import com.example.keiba.service.HorseView
+import com.example.keiba.service.LibraryService
+import com.example.keiba.service.WeatherService
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -25,8 +30,25 @@ data class FavoriteRequest(val horseName: String)
 @Serializable
 data class NoteRequest(val raceId: String, val note: String)
 
-fun main() {
-    val raceService = RaceService()
+@Serializable
+data class HorseDetail(val view: HorseView, val summary: String?)
+
+fun main(args: Array<String>) {
+    // `--sync <dir>`: Wikipedia から最新データを取り、<dir>/library.json.gz に書いて終了 (同梱データの作成用)
+    if (args.firstOrNull() == "--sync") {
+        val dir = java.io.File(args.getOrNull(1) ?: "src/main/resources/data")
+        val lib = LibraryService()
+        runBlocking {
+            val job = lib.refresh(java.io.File(dir, "library.json.gz"))!!
+            while (job.isActive) { println(lib.progress); delay(3000) }
+        }
+        println(lib.status())
+        return
+    }
+
+    val weatherService = WeatherService()
+    val library = LibraryService().also { it.refreshIfStale() }
+    val raceService = RaceService(weatherService)
     val authService = AuthService()
     val encyclopediaService = com.example.keiba.service.EncyclopediaService()
 
@@ -34,7 +56,7 @@ fun main() {
     val host = "0.0.0.0"
 
     println("==================================================")
-    println("🚀 Keiba Vision AI (Apple Liquid Glass Edition)")
+    println("Keiba Vision")
     println("環境: Chimera Linux (musl) / Arch Linux / Windows")
     println("サーバー起動中: http://localhost:$port")
     println("==================================================")
@@ -42,7 +64,8 @@ fun main() {
     val server = embeddedServer(Netty, port = port, host = host) {
         install(ContentNegotiation) {
             json(Json {
-                prettyPrint = true
+                prettyPrint = false
+                encodeDefaults = true // 空文字や空配列も省略せず返す (フロントで undefined にしない)
                 isLenient = true
                 ignoreUnknownKeys = true
             })
@@ -74,7 +97,7 @@ fun main() {
             // 静的アセットの提供
             staticResources("/static", "static")
 
-            // ルートアクセスで Liquid Glass UI を配信
+            // トップページ
             get("/") {
                 val indexStream = javaClass.getResourceAsStream("/static/index.html")
                 if (indexStream != null) {
@@ -84,35 +107,50 @@ fun main() {
                 }
             }
 
-            // ヘルスチェック
-            get("/api/health") {
-                call.respond(mapOf(
-                    "status" to "ok",
-                    "system" to "Chimera musl / Linux / Windows Compatible",
-                    "version" to "3.9.0"
+            get("/api/health") { call.respond(mapOf("status" to "ok", "version" to "2.0.0")) }
+
+            // ライブラリ (Wikipedia / Wikidata 由来): 競走馬・競走・競馬場
+            get("/api/library/status") { call.respond(library.status()) }
+            post("/api/library/refresh") {
+                library.refresh()
+                call.respond(library.status())
+            }
+            get("/api/horses") {
+                val q = call.request.queryParameters
+                call.respond(library.searchHorses(
+                    q["q"] ?: "", q["sort"] ?: "rating", q["photo"] == "1", q["sex"] ?: "", q["surface"] ?: "",
+                    q["offset"]?.toIntOrNull() ?: 0, q["limit"]?.toIntOrNull() ?: 48
                 ))
             }
-
-            // 名鑑 & 血統 & コース図 API
-            route("/api/encyclopedia") {
-                get("horses") {
-                    call.respond(encyclopediaService.getLegendaryHorses())
-                }
-                get("pedigree") {
-                    call.respond(encyclopediaService.getPedigreeLineages())
-                }
-                get("courses") {
-                    call.respond(encyclopediaService.getRacecourseGuides())
-                }
-                get("breeds") {
-                    call.respond(encyclopediaService.getBreeds())
-                }
-                get("coats") {
-                    call.respond(encyclopediaService.getCoatColors())
-                }
+            get("/api/horses/detail") {
+                val title = call.request.queryParameters["title"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+                val view = library.horse(title) ?: return@get call.respond(HttpStatusCode.NotFound)
+                call.respond(HorseDetail(view, library.summary(title)))
+            }
+            get("/api/catalog/races") {
+                val q = call.request.queryParameters
+                call.respond(library.searchRaces(
+                    q["q"] ?: "", q["course"] ?: "", q["grade"] ?: "", q["surface"] ?: "",
+                    q["offset"]?.toIntOrNull() ?: 0, q["limit"]?.toIntOrNull() ?: 100
+                ))
+            }
+            get("/api/courses") { call.respond(library.courses()) }
+            get("/api/weather") {
+                val points = library.courses().mapNotNull { c -> if (c.lat != null && c.lon != null) Triple(c.id, c.lat, c.lon) else null }
+                call.respond(weatherService.currentFor(points))
+            }
+            get("/api/media") {
+                val files = call.request.queryParameters["files"]?.split("|")?.filter { it.isNotBlank() }?.take(100) ?: emptyList()
+                call.respond(library.credits(files))
             }
 
-            // Native / Wasm / Zig / Odin ステータス API
+            // 血統・品種・毛色 (アプリ内蔵の解説データ)
+            route("/api/encyclopedia") {
+                get("pedigree") { call.respond(encyclopediaService.getPedigreeLineages()) }
+                get("breeds") { call.respond(encyclopediaService.getBreeds()) }
+                get("coats") { call.respond(encyclopediaService.getCoatColors()) }
+            }
+
             get("/api/native/info") {
                 // 実際に同梱されている wasm のサイズを返す (無ければ 0)
                 call.respond(listOf("keiba_physics", "montecarlo", "pedigree").associateWith { name ->
@@ -228,8 +266,8 @@ fun main() {
 
     server.start(wait = false)
 
-    println("✅ Keiba Vision AI サーバーが起動しました！")
-    println("👉 ブラウザで http://localhost:$port を開いてください。")
+    println("Keiba Vision を起動しました")
+    println("ブラウザで http://localhost:$port を開いてください")
     println("--------------------------------------------------")
 
     // クロスプラットフォーム (Chimera Linux musl, Arch Linux, Windows) 対応ブラウザオープン

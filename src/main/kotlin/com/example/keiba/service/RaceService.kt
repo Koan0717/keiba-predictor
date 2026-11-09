@@ -112,12 +112,8 @@ class RaceService(
         )
     }
 
-    suspend fun getAllRacesSummary(): List<Race> = coroutineScope {
-        races.values.map { race ->
-            val weatherDeferred = async { weatherService.getWeatherForRacecourse(race.racecourse) }
-            race.copy(weather = weatherDeferred.await())
-        }
-    }
+    /** 一覧 (タブ表示用) は天気を待たずに返す */
+    fun getAllRacesSummary(): List<Race> = races.values.toList()
 
     suspend fun getRaceAnalysis(raceId: String): RaceAnalysis? = coroutineScope {
         val baseRace = races[raceId] ?: return@coroutineScope null

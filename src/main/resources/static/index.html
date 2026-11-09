@@ -2,487 +2,331 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Keiba Vision Pro | Apple Glass Edition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <title>Keiba Vision</title>
+  <meta name="description" content="全国25競馬場・5,800頭超の競走馬名鑑、3Dレースシミュレーション、公式中継をひとつに。">
   <script>
-    // 描画前にテーマを決める (保存値 → OS設定) ことで白→黒のチラつきを防ぐ
+    // 描画前にテーマを決めてチラつきを防ぐ (保存値 → OS 設定)
     (function () {
       var t = null;
-      try { t = localStorage.getItem("keiba_theme"); } catch (e) {}
+      try { t = localStorage.getItem("kv-theme"); } catch (e) {}
       if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      document.documentElement.setAttribute("data-theme", t);
+      document.documentElement.dataset.theme = t;
     })();
   </script>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏇</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho+B1:wght@600;700&display=swap">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a6b45'/><path d='M9 7c-3 6-3 13 2 17 3 2 7 2 10 0 5-4 5-11 2-17' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+  <script type="importmap">{ "imports": { "three": "/static/vendor/three.module.min.js" } }</script>
 </head>
 <body>
 
-  <!-- 起動スプラッシュ: 光の粒が走り、リングが広がり、最後に円形に「開いて」アプリが現れる -->
-  <div class="splash" id="splash" role="status" aria-label="起動中">
-    <canvas class="splash-canvas" id="splash-canvas"></canvas>
-    <div class="splash-glow"></div>
-    <div class="splash-ring"></div>
-    <div class="splash-ring"></div>
-    <div class="splash-ring"></div>
-    <div class="splash-core">
-      <div class="splash-logo">
-        <svg viewBox="0 0 120 120" aria-hidden="true">
-          <defs>
-            <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#7dd3fc"/><stop offset=".5" stop-color="#818cf8"/><stop offset="1" stop-color="#f0abfc"/>
-            </linearGradient>
-          </defs>
-          <!-- 蹄鉄 -->
-          <path class="logo-shoe" d="M30 26 C18 48 18 78 36 94 C48 104 72 104 84 94 C102 78 102 48 90 26" />
-          <g class="logo-nails"><circle cx="27" cy="52" r="3"/><circle cx="30" cy="72" r="3"/><circle cx="93" cy="52" r="3"/><circle cx="90" cy="72" r="3"/></g>
-          <text class="logo-k" x="60" y="76" text-anchor="middle">K</text>
-        </svg>
-      </div>
-      <h1 class="splash-title" id="splash-title">Keiba Vision</h1>
-      <p class="splash-sub">Kotlin · Zig · Odin · WebAssembly</p>
-      <ul class="splash-boot" id="splash-boot">
-        <li data-boot="kotlin">Kotlin API</li>
-        <li data-boot="c">C Wasm 物理</li>
-        <li data-boot="zig">Zig モンテカルロ</li>
-        <li data-boot="odin">Odin 血統計算</li>
-      </ul>
+  <!-- 起動演出: 発馬ゲートが開いて本編へ -->
+  <div class="splash" id="splash" role="status" aria-label="読み込み中">
+    <div class="gate" id="gate" aria-hidden="true"></div>
+    <div class="splash-brand">
+      <p class="splash-kicker">全国25場 ・ 競走馬名鑑 ・ 3Dシミュレーション</p>
+      <h1 class="splash-title">Keiba Vision</h1>
       <div class="splash-progress"><span id="splash-bar"></span></div>
+      <p class="splash-status" id="splash-status">準備しています</p>
     </div>
-    <button class="splash-skip" id="splash-skip">スキップ</button>
+    <button class="splash-skip" id="splash-skip" type="button">スキップ</button>
   </div>
 
-  <!-- ガラスの向こうで揺れる光 (グラスモーフィズムの「透け感」を作る背景) -->
-  <div class="ambient" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="shell" id="shell">
+    <aside class="sidebar" id="sidebar" aria-label="メニュー">
+      <a class="brand" href="#/home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 7c-3 6-3 13 2 17 3 2 7 2 10 0 5-4 5-11 2-17"/></svg></span>
+        <span class="brand-name">Keiba Vision</span>
+      </a>
 
-  <div class="app-layout">
-
-    <!-- Apple Style Frosted Glass Sidebar Navigation -->
-    <aside class="glass-sidebar" aria-label="サイドメニュー">
-      <div class="sidebar-header">
-        <div class="brand-icon-box">🏇</div>
-        <div class="brand-name-box">
-          <h1>Keiba Vision</h1>
-          <span>Pro Edition</span>
-        </div>
-      </div>
-
-      <nav class="sidebar-nav" id="sidebar-nav">
-        <span class="nav-indicator" id="nav-indicator" aria-hidden="true"></span>
-        <div class="nav-category-label">メイン機能</div>
-        <button class="sidebar-tab-btn active" data-view="dashboard">
-          <span class="tab-icon">📊</span>
-          <span>レース予想・分析</span>
-        </button>
-        <button class="sidebar-tab-btn" data-view="encyclopedia">
-          <span class="tab-icon">📖</span>
-          <span>競走馬名鑑</span>
-        </button>
-        <button class="sidebar-tab-btn" data-view="breeds">
-          <span class="tab-icon">🐴</span>
-          <span>馬の種類・毛色</span>
-        </button>
-        <button class="sidebar-tab-btn" data-view="pedigree">
-          <span class="tab-icon">🧬</span>
-          <span>血統・系統図</span>
-        </button>
-        <button class="sidebar-tab-btn" data-view="courses">
-          <span class="tab-icon">🏟️</span>
-          <span>競馬場コース図</span>
-        </button>
-
-        <div class="nav-category-label" style="margin-top: 0.5rem;">ツール</div>
-        <button class="sidebar-tab-btn" data-view="simulator">
-          <span class="tab-icon">🎯</span>
-          <span>買い目シミュレータ</span>
-        </button>
-        <button class="sidebar-tab-btn" data-view="settings">
-          <span class="tab-icon">⚙️</span>
-          <span>システム & エンジン</span>
-        </button>
+      <nav class="nav" id="nav">
+        <span class="nav-pill" id="nav-pill" aria-hidden="true"></span>
+        <a href="#/home" data-view="home"><svg><use href="/static/icons/sprite.svg#i-house"/></svg><span>ホーム</span></a>
+        <a href="#/races" data-view="races"><svg><use href="/static/icons/sprite.svg#i-flag"/></svg><span>レース予想</span></a>
+        <a href="#/sim" data-view="sim"><svg><use href="/static/icons/sprite.svg#i-rotate-3d"/></svg><span>3D シミュレーション</span></a>
+        <a href="#/live" data-view="live"><svg><use href="/static/icons/sprite.svg#i-tv"/></svg><span>中継</span></a>
+        <p class="nav-label">データ</p>
+        <a href="#/courses" data-view="courses"><svg><use href="/static/icons/sprite.svg#i-map-pin"/></svg><span>競馬場</span></a>
+        <a href="#/catalog" data-view="catalog"><svg><use href="/static/icons/sprite.svg#i-trophy"/></svg><span>競走一覧</span></a>
+        <a href="#/horses" data-view="horses"><svg><use href="/static/icons/sprite.svg#i-book-open"/></svg><span>競走馬名鑑</span></a>
+        <a href="#/pedigree" data-view="pedigree"><svg><use href="/static/icons/sprite.svg#i-network"/></svg><span>血統</span></a>
+        <a href="#/knowledge" data-view="knowledge"><svg><use href="/static/icons/sprite.svg#i-swatch-book"/></svg><span>品種と毛色</span></a>
+        <p class="nav-label">ツール</p>
+        <a href="#/tools" data-view="tools"><svg><use href="/static/icons/sprite.svg#i-calculator"/></svg><span>払戻計算</span></a>
+        <a href="#/settings" data-view="settings"><svg><use href="/static/icons/sprite.svg#i-settings"/></svg><span>設定</span></a>
       </nav>
 
-      <div class="sidebar-footer">
-        <div class="theme-toggle-row">
-          <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-secondary);">外観モード</span>
-          <button class="theme-toggle-btn" id="theme-toggle-btn" aria-label="ダーク / ライトモード切り替え">
-            <span class="theme-switch"><span class="theme-knob" id="theme-icon">🌙</span></span>
-            <span id="theme-text">ダーク</span>
-          </button>
-        </div>
-        <div class="wasm-status-pill">
-          <span class="wasm-dot"></span>
-          <span id="wasm-engine-label">エンジン読込中…</span>
-        </div>
+      <div class="sidebar-foot">
+        <div class="account" id="account"></div>
+        <button class="theme-switch" id="theme-switch" type="button" aria-label="ライト・ダーク切り替え">
+          <svg class="ts-sun"><use href="/static/icons/sprite.svg#i-sun"/></svg>
+          <svg class="ts-moon"><use href="/static/icons/sprite.svg#i-moon"/></svg>
+        </button>
       </div>
     </aside>
 
-    <!-- Main Content Area -->
-    <main class="main-wrapper">
-
-      <!-- Top Navigation Bar -->
-      <header class="top-navbar">
-        <!-- Race Selector (Visible on Dashboard) -->
-        <div class="race-picker-tabs" id="race-tabs-bar">
-          <button class="race-btn active" data-race="arima-2026">有馬記念 (G1)</button>
-          <button class="race-btn" data-race="derby-2026">日本ダービー (G1)</button>
-          <button class="race-btn" data-race="jc-2026">ジャパンカップ (G1)</button>
-        </div>
-
-        <!-- Auth Section -->
-        <div id="auth-container">
-          <button id="open-login-btn" class="race-btn active" style="padding: 0.45rem 1.1rem;">
-            <span>✨ ログイン</span>
-          </button>
-        </div>
-      </header>
-
-      <!-- ====================================================================
-           VIEW 1: DASHBOARD (レース予想・分析)
-           ==================================================================== -->
-      <section id="view-dashboard" class="view-section active">
-
-        <!-- Race Hero Card -->
-        <div class="glass-panel race-hero-layout">
-          <div>
-            <div style="display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.6rem;">
-              <span class="grade-badge-solid" id="race-grade">G1</span>
-              <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);" id="race-track">中山競馬場</span>
-              <span style="font-size: 0.8rem; color: var(--text-tertiary);" id="race-course-info">芝 2500m (右・内)</span>
-              <span style="font-size: 0.8rem; color: var(--color-primary); font-weight: 700;" id="race-time">発走 15:25</span>
-            </div>
-            <h2 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.25rem;" id="race-title">有馬記念 (グランプリ)</h2>
-            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;" id="race-subtitle">第69回 暮れの大一番・ドリームレース</p>
-
-            <div style="display: flex; gap: 1.5rem; font-size: 0.85rem;">
-              <div>🏆 1着賞金: <strong id="race-prize" style="font-family: var(--font-mono);">5億円</strong></div>
-              <div>📊 出走頭数: <strong id="horse-count">16頭</strong></div>
-              <div>⚡ 演算: <strong style="color: var(--color-primary);">Wasm + Kotlin</strong></div>
-            </div>
+    <main class="main" id="main">
+      <!-- HOME -->
+      <section class="view" id="view-home">
+        <div class="hero" id="hero">
+          <img class="hero-img" id="hero-img" alt="">
+          <div class="hero-shade"></div>
+          <div class="hero-body">
+            <p class="eyebrow" id="hero-date"></p>
+            <h1 class="display">今日の、全国の馬場。</h1>
+            <p class="hero-lead">中央10場・地方15場の現在の天気と、推定の馬場状態。</p>
           </div>
+          <p class="credit hero-credit" id="hero-credit"></p>
+        </div>
+        <div class="stat-row" id="home-stats"></div>
+        <section class="block">
+          <header class="block-head"><h2>全国の天気と推定馬場</h2><a class="link" href="#/courses">競馬場一覧<svg><use href="/static/icons/sprite.svg#i-chevron-right"/></svg></a></header>
+          <div class="weather-grid" id="weather-grid"></div>
+          <p class="fine">天気: Open-Meteo (10分ごと更新)。馬場状態は降水量からの推定で、公式発表ではありません。</p>
+        </section>
+        <section class="block">
+          <header class="block-head"><h2>名馬たち</h2><a class="link" href="#/horses">名鑑を開く<svg><use href="/static/icons/sprite.svg#i-chevron-right"/></svg></a></header>
+          <div class="rail" id="home-horses"></div>
+        </section>
+      </section>
 
-          <!-- Weather Box (Open-Meteo Live) -->
-          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border-subtle);">
-            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; font-weight: 700; margin-bottom: 0.5rem;">
-              <span style="color: var(--text-secondary);">現地気象 (Open-Meteo)</span>
-              <span style="color: var(--status-success);" id="weather-status-badge">● LIVE 連動中</span>
+      <!-- RACES -->
+      <section class="view" id="view-races">
+        <header class="page-head">
+          <div><p class="eyebrow">Prediction</p><h1 class="title">レース予想</h1></div>
+          <div class="seg" id="race-tabs" role="tablist"></div>
+        </header>
+        <div class="race-hero card" id="race-hero"></div>
+        <div class="grid-2">
+          <section class="card">
+            <header class="card-head"><h3>勝率シミュレーション</h3>
+              <div class="seg small" id="mc-pace" role="radiogroup" aria-label="想定ペース">
+                <button data-pace="0.8" type="button">スロー</button><button data-pace="1.0" class="on" type="button">ミドル</button><button data-pace="1.2" type="button">ハイ</button>
+              </div>
+            </header>
+            <p class="note">同じレースを 100,000 回走らせ、1着になった割合 (濃) と3着以内の割合 (淡)。</p>
+            <div class="mc" id="mc"></div>
+            <p class="fine" id="mc-meta"></p>
+          </section>
+          <section class="card">
+            <header class="card-head"><h3>買い目と配分</h3><button class="btn ghost small" id="note-open" type="button"><svg><use href="/static/icons/sprite.svg#i-notebook-pen"/></svg>メモ</button></header>
+            <div class="bets" id="bets"></div>
+          </section>
+        </div>
+        <section class="card">
+          <header class="card-head"><h3>出馬表</h3>
+            <div class="seg small" id="table-sort">
+              <button data-sort="num" class="on" type="button">馬番</button><button data-sort="score" type="button">評価</button><button data-sort="odds" type="button">人気</button><button data-sort="ev" type="button">妙味</button>
             </div>
-            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
-              <div style="font-size: 2.2rem;" id="weather-icon">☀️</div>
-              <div>
-                <div style="font-size: 1.6rem; font-weight: 800; font-family: var(--font-mono);" id="weather-temp">16.4°C</div>
-                <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);" id="weather-desc">快晴・良馬場</div>
+          </header>
+          <div class="table-wrap"><table class="table" id="entry-table"></table></div>
+        </section>
+        <div class="actions"><button class="btn primary" id="race-to-sim" type="button"><svg><use href="/static/icons/sprite.svg#i-rotate-3d"/></svg>このレースを3Dで見る</button></div>
+      </section>
+
+      <!-- SIM -->
+      <section class="view view-flush" id="view-sim">
+        <div class="sim">
+          <div class="sim-stage" id="sim-stage">
+            <canvas id="sim-canvas"></canvas>
+            <div class="sim-hud glass" id="sim-hud" hidden>
+              <div class="hud-top"><span class="hud-course" id="hud-course"></span><span class="hud-remain" id="hud-remain"></span><span class="hud-clock" id="hud-clock"></span></div>
+              <ol class="hud-order" id="hud-order"></ol>
+            </div>
+            <div class="sim-cams glass" id="sim-cams">
+              <button data-cam="broadcast" class="on" type="button" title="中継カメラ" aria-label="中継カメラ"><svg><use href="/static/icons/sprite.svg#i-video"/></svg></button>
+              <button data-cam="chase" type="button" title="先頭を追う" aria-label="先頭を追う"><svg><use href="/static/icons/sprite.svg#i-camera"/></svg></button>
+              <button data-cam="aerial" type="button" title="俯瞰" aria-label="俯瞰"><svg><use href="/static/icons/sprite.svg#i-map-pin"/></svg></button>
+              <button data-cam="free" type="button" title="自由視点 (ドラッグで回転)" aria-label="自由視点"><svg><use href="/static/icons/sprite.svg#i-rotate-3d"/></svg></button>
+              <span class="sep"></span>
+              <button data-speed="1" class="on" type="button" title="等速">1×</button>
+              <button data-speed="2" type="button" title="2倍速">2×</button>
+              <button data-speed="4" type="button" title="4倍速">4×</button>
+            </div>
+            <div class="sim-result glass" id="sim-result" hidden></div>
+            <div class="sim-loading" id="sim-loading">3D を準備しています</div>
+          </div>
+          <aside class="sim-panel" id="sim-panel">
+            <h2 class="panel-title">レースを組む</h2>
+            <label class="field"><span>競馬場</span><select id="sim-course"></select></label>
+            <div class="field-row">
+              <label class="field"><span>距離 (m)</span><input id="sim-distance" type="number" min="200" max="4000" step="100" value="2000"></label>
+              <label class="field"><span>馬場</span><select id="sim-surface"><option>芝</option><option>ダート</option></select></label>
+            </div>
+            <label class="field"><span>想定ペース</span>
+              <select id="sim-pace"><option value="0.8">スロー</option><option value="1.0" selected>ミドル</option><option value="1.2">ハイ</option></select></label>
+            <div class="field">
+              <span>出走馬 <em id="sim-count">0 / 18</em></span>
+              <div class="search-add">
+                <svg><use href="/static/icons/sprite.svg#i-search"/></svg>
+                <input id="sim-search" type="search" placeholder="名鑑から馬を追加" autocomplete="off" aria-label="名鑑から馬を追加">
+                <ul class="suggest" id="sim-suggest" hidden></ul>
+              </div>
+              <ol class="field-list" id="sim-field"></ol>
+              <div class="btn-row">
+                <button class="btn ghost small" id="sim-auto" type="button"><svg><use href="/static/icons/sprite.svg#i-shuffle"/></svg>名馬でおまかせ</button>
+                <button class="btn ghost small" id="sim-clear" type="button">クリア</button>
               </div>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-tertiary);">
-              <span>風速: <strong id="weather-wind">12 km/h</strong></span>
-              <span>降水: <strong id="weather-rain">0.0 mm</strong></span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Wasm Acceleration Track Position Diagram -->
-        <div class="glass-panel" style="padding: 1.25rem 1.75rem;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="font-size: 1.05rem; font-weight: 700;">🏇 Wasm 直線展開・スパート物理シミュレーター</h3>
-            <span style="font-size: 0.75rem; color: var(--text-tertiary);">第4コーナーから直線への隊列予想 (Wasm 60fps)</span>
-          </div>
-          <div class="track-diagram-box" id="sim-track">
-            <div class="finish-label">GOAL</div>
-            <div class="finish-line"></div>
-            <!-- Dynamic Runners -->
-          </div>
-        </div>
-
-        <!-- Zig Monte Carlo -->
-        <div class="glass-panel">
-          <div class="panel-head">
-            <div>
-              <h3 style="font-size: 1.05rem; font-weight: 700;">🎲 Zig モンテカルロ・シミュレーション</h3>
-              <p class="panel-note">同じレースを <strong>10万回</strong> 走らせて「何回勝ったか」を数えた勝率です (Zig → WebAssembly で計算)。</p>
-            </div>
-            <div class="seg" id="mc-pace" role="radiogroup" aria-label="想定ペース">
-              <button data-pace="0.8" role="radio">スロー</button>
-              <button data-pace="1.0" role="radio" class="active">ミドル</button>
-              <button data-pace="1.2" role="radio">ハイ</button>
-            </div>
-          </div>
-          <div class="mc-bars" id="mc-bars"></div>
-          <div class="panel-note" id="mc-meta" style="margin-top: .75rem;"></div>
-        </div>
-
-        <!-- Predictions & Betting Strategy Columns -->
-        <div class="two-col">
-
-          <!-- Top Picks -->
-          <div class="glass-panel" style="margin-bottom: 0;">
-            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;">注目推奨馬 (印・総合指数)</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.85rem;" id="top-picks-container">
-              <!-- Rendered via JS -->
-            </div>
-          </div>
-
-          <!-- Betting Strategy -->
-          <div class="glass-panel" style="margin-bottom: 0;">
-            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;">推奨買い目・資金配分</h3>
-            <div style="display: flex; flex-direction: column; gap: 0.75rem;" id="bet-list-container">
-              <!-- Rendered via JS -->
-            </div>
-          </div>
-
-        </div>
-
-        <!-- Full Gate Table -->
-        <div class="glass-panel">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
-            <h3 style="font-size: 1.15rem; font-weight: 700;">出馬表・詳細指数マトリクス</h3>
-            <div style="display: flex; gap: 0.4rem;" id="table-filter-group">
-              <button class="race-btn active" data-filter="all">馬番順</button>
-              <button class="race-btn" data-filter="ai-score">総合指数順</button>
-              <button class="race-btn" data-filter="odds">人気順</button>
-              <button class="race-btn" data-filter="ev">期待値(穴)</button>
-            </div>
-          </div>
-
-          <div class="data-table-container">
-            <table class="modern-table">
-              <thead>
-                <tr>
-                  <th style="width: 36px; text-align: center;">★</th>
-                  <th style="width: 50px; text-align: center;">枠/番</th>
-                  <th style="width: 44px; text-align: center;">印</th>
-                  <th>馬名 / 父・母父</th>
-                  <th>性齢/斤量</th>
-                  <th>騎手/厩舎</th>
-                  <th>単勝オッズ</th>
-                  <th>指数</th>
-                  <th>脚質</th>
-                  <th>調教</th>
-                  <th style="width: 140px;">総合評価</th>
-                </tr>
-              </thead>
-              <tbody id="horses-table-body">
-                <!-- Dynamic Rows -->
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </section>
-
-      <!-- ====================================================================
-           VIEW 2: HORSE ENCYCLOPEDIA (競走馬名鑑)
-           ==================================================================== -->
-      <section id="view-encyclopedia" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">競走馬名鑑 (Legendary Horses)</h2>
-          <p class="view-subtitle">競馬史にその名を刻んだ歴史的名馬たちのステータス、戦績、能力レーダー図</p>
-          <input type="search" class="sim-input search-input" id="horse-search" placeholder="🔍 馬名・父・勝ち鞍で検索 (例: 有馬記念)" aria-label="名鑑を検索">
-        </div>
-        <div class="horse-grid" id="encyclopedia-grid">
-          <!-- Loaded from /api/encyclopedia/horses -->
+            <button class="btn primary wide" id="sim-start" type="button"><svg><use href="/static/icons/sprite.svg#i-play"/></svg>スタート</button>
+            <p class="fine">着順は能力値・脚質・ペース・距離と馬場の適性・乱数から決まります (計算は Zig)。能力値は Wikipedia 記載の戦績から算出した参考値です。</p>
+          </aside>
         </div>
       </section>
 
-      <!-- ====================================================================
-           VIEW: BREEDS & COAT COLORS (馬の種類・毛色)
-           ==================================================================== -->
-      <section id="view-breeds" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">馬の種類 & 毛色図鑑</h2>
-          <p class="view-subtitle">競走馬だけじゃない。品種ごとの体格の違いと、JRA公式の8つの毛色を図で見比べよう</p>
+      <!-- LIVE -->
+      <section class="view" id="view-live">
+        <header class="page-head"><div><p class="eyebrow">Live</p><h1 class="title">中継</h1></div></header>
+        <div class="player card flush" id="player">
+          <div class="player-frame" id="player-frame"><p class="player-empty">下の一覧から競馬場を選んでください</p></div>
+          <div class="player-bar">
+            <div class="player-meta"><strong id="player-title">—</strong><span class="muted" id="player-sub"></span></div>
+            <div class="seg small" id="player-mode"><button data-mode="latest" class="on" type="button">最新の映像</button><button data-mode="live" type="button">ライブ</button></div>
+            <a class="btn ghost small" id="player-open" target="_blank" rel="noopener"><svg><use href="/static/icons/sprite.svg#i-external-link"/></svg>公式で開く</a>
+          </div>
         </div>
-        <div class="glass-panel">
-          <h3 class="panel-title">📏 体高くらべ (人間 170cm と比較)</h3>
-          <div id="breed-size-chart" class="size-chart"></div>
+        <p class="fine">各競馬場の公式 YouTube チャンネルを埋め込み表示します。ライブは配信中のみ再生でき、配信がない時間は「最新の映像」で過去のレースを見られます。中央競馬のレースのライブ映像は JRA の公式サービスで配信されています。</p>
+        <div class="live-grid" id="live-grid"></div>
+      </section>
+
+      <!-- COURSES -->
+      <section class="view" id="view-courses">
+        <header class="page-head"><div><p class="eyebrow">Racecourses</p><h1 class="title">全国の競馬場</h1></div>
+          <div class="seg small" id="course-filter"><button data-cat="" class="on" type="button">すべて</button><button data-cat="中央" type="button">中央</button><button data-cat="地方" type="button">地方</button><button data-cat="ばんえい" type="button">ばんえい</button></div>
+        </header>
+        <div class="course-grid" id="course-grid"></div>
+      </section>
+
+      <!-- CATALOG -->
+      <section class="view" id="view-catalog">
+        <header class="page-head"><div><p class="eyebrow">Races</p><h1 class="title">競走一覧</h1></div><p class="muted" id="catalog-count"></p></header>
+        <div class="toolbar">
+          <label class="search"><svg><use href="/static/icons/sprite.svg#i-search"/></svg><input id="catalog-q" type="search" placeholder="競走名で検索" aria-label="競走名で検索"></label>
+          <select id="catalog-course" aria-label="競馬場"><option value="">すべての競馬場</option></select>
+          <select id="catalog-grade" aria-label="格付け"><option value="">すべての格付け</option><option>GI</option><option>GII</option><option>GIII</option><option>JpnI</option><option>JpnII</option><option>JpnIII</option><option>重賞</option><option>L</option></select>
+          <select id="catalog-surface" aria-label="馬場"><option value="">芝・ダート</option><option>芝</option><option>ダート</option><option>障害</option></select>
         </div>
-        <div class="horse-grid" id="breed-grid"></div>
-        <div class="view-header" style="margin-top: 1rem;">
-          <h2 class="view-title" style="font-size: 1.35rem;">🎨 JRA 公式 8 毛色</h2>
-          <p class="view-subtitle">体の色と、たてがみ・尾の色の組み合わせで決まります</p>
+        <div class="table-wrap card flush"><table class="table" id="catalog-table"></table></div>
+        <div class="actions"><button class="btn ghost" id="catalog-more" type="button">さらに表示</button></div>
+        <p class="fine">データ: 日本語版 Wikipedia「競馬の競走」記事のインフォボックス (CC BY-SA 4.0)。</p>
+      </section>
+
+      <!-- HORSES -->
+      <section class="view" id="view-horses">
+        <header class="page-head"><div><p class="eyebrow">Horses</p><h1 class="title">競走馬名鑑</h1></div><p class="muted" id="horse-count"></p></header>
+        <div class="toolbar">
+          <label class="search"><svg><use href="/static/icons/sprite.svg#i-search"/></svg><input id="horse-q" type="search" placeholder="馬名・父・母・勝ち鞍で検索" aria-label="名鑑を検索"></label>
+          <select id="horse-sort" aria-label="並び順"><option value="rating">能力値順</option><option value="wins">重賞勝利数順</option><option value="new">新しい順</option><option value="old">古い順</option><option value="name">名前順</option></select>
+          <select id="horse-sex" aria-label="性別"><option value="">性別</option><option value="牡">牡</option><option value="牝">牝</option><option value="セ">セン</option></select>
+          <select id="horse-surface" aria-label="馬場"><option value="">芝・ダート</option><option>芝</option><option>ダート</option></select>
+          <label class="check"><input type="checkbox" id="horse-photo" checked> 写真あり</label>
         </div>
+        <div class="horse-grid" id="horse-grid"></div>
+        <div class="actions"><button class="btn ghost" id="horse-more" type="button">さらに表示</button></div>
+        <p class="fine">データ: 日本語版 Wikipedia「競走馬」記事のインフォボックス (CC BY-SA 4.0)。写真: Wikimedia Commons (作者・ライセンスは詳細画面に表示)。</p>
+      </section>
+
+      <!-- PEDIGREE -->
+      <section class="view" id="view-pedigree">
+        <header class="page-head"><div><p class="eyebrow">Pedigree</p><h1 class="title">血統</h1></div></header>
+        <section class="card calc">
+          <div>
+            <h3>血量と近交係数</h3>
+            <p class="note">同じ祖先が父方の何代目・母方の何代目に現れるか (クロス) から、その祖先の血の割合を計算します。3×4 は「奇跡の血量」と呼ばれる 18.75%。</p>
+            <div class="calc-in">
+              <label>父方 <input id="odin-g1" type="number" min="1" max="12" value="3"> 代</label>
+              <span class="x">×</span>
+              <label>母方 <input id="odin-g2" type="number" min="1" max="12" value="4"> 代</label>
+            </div>
+          </div>
+          <div class="calc-out" id="odin-out" aria-live="polite"></div>
+        </section>
+        <section class="card"><header class="card-head"><h3>主な父系</h3></header><div class="tree" id="lineage-tree"></div></section>
+        <div class="grid-2" id="lineage-cards"></div>
+      </section>
+
+      <!-- KNOWLEDGE -->
+      <section class="view" id="view-knowledge">
+        <header class="page-head"><div><p class="eyebrow">Breeds &amp; Coats</p><h1 class="title">品種と毛色</h1></div></header>
+        <section class="card"><header class="card-head"><h3>体高くらべ</h3><span class="muted">地面から肩 (き甲) までの高さ</span></header><div class="size-chart" id="size-chart"></div></section>
+        <div class="breed-grid" id="breed-grid"></div>
+        <header class="block-head"><h2>JRA の8つの毛色</h2></header>
         <div class="coat-grid" id="coat-grid"></div>
       </section>
 
-      <!-- ====================================================================
-           VIEW 3: PEDIGREE LINEAGES (血統・系統図)
-           ==================================================================== -->
-      <section id="view-pedigree" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">血統系統図 & ニックス解説 (Pedigree)</h2>
-          <p class="view-subtitle">日本の芝・ダートを席巻する主要父系と後継種牡馬、コース適性の相関</p>
-        </div>
-        <div class="glass-panel odin-calc">
+      <!-- TOOLS -->
+      <section class="view" id="view-tools">
+        <header class="page-head"><div><p class="eyebrow">Tools</p><h1 class="title">払戻計算</h1></div></header>
+        <section class="card calc">
           <div>
-            <h3 class="panel-title">🧬 Odin 血量・近交係数計算機</h3>
-            <p class="panel-note">同じ祖先が「父方の何代目」と「母方の何代目」に出てくるか (クロス) を入れると、その祖先の血が何%入っているかを Odin (WebAssembly) が計算します。例: <code>3×4</code> は有名な「奇跡の血量 18.75%」。</p>
-            <div class="odin-inputs">
-              <label>父方 <input type="number" min="1" max="12" value="3" class="sim-input" id="odin-g1"> 代目</label>
-              <span>×</span>
-              <label>母方 <input type="number" min="1" max="12" value="4" class="sim-input" id="odin-g2"> 代目</label>
+            <label class="field"><span>券種</span><select id="pay-type"><option>単勝</option><option>複勝</option><option>馬連</option><option>ワイド</option><option>馬単</option><option>3連複</option><option>3連単</option></select></label>
+            <div class="field-row">
+              <label class="field"><span>オッズ (倍)</span><input id="pay-odds" type="number" min="1" step="0.1" value="8.5"></label>
+              <label class="field"><span>購入金額 (円)</span><input id="pay-amount" type="number" min="100" step="100" value="1000"></label>
             </div>
           </div>
-          <div class="odin-result" id="odin-result" aria-live="polite"></div>
-        </div>
-        <div class="glass-panel">
-          <h3 class="panel-title">🌳 主要父系の系統図</h3>
-          <div class="lineage-tree" id="lineage-tree"></div>
-        </div>
-        <div class="pedigree-grid" id="pedigree-grid">
-          <!-- Loaded from /api/encyclopedia/pedigree -->
-        </div>
+          <div class="calc-out" id="pay-out"></div>
+        </section>
       </section>
 
-      <!-- ====================================================================
-           VIEW 4: RACECOURSE GUIDES (競馬場立体コース図)
-           ==================================================================== -->
-      <section id="view-courses" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">競馬場ガイド & コース立体構造 (Courses)</h2>
-          <p class="view-subtitle">東京・中山・京都・阪神の高低差、最後の直線の長さ、坂の攻略ポイント</p>
-        </div>
-        <div class="course-grid" id="course-grid">
-          <!-- Loaded from /api/encyclopedia/courses -->
-        </div>
+      <!-- SETTINGS -->
+      <section class="view" id="view-settings">
+        <header class="page-head"><div><p class="eyebrow">Settings</p><h1 class="title">設定</h1></div></header>
+        <section class="card list">
+          <div class="row"><div><strong>外観</strong><p class="muted">自動にすると OS の設定に合わせます</p></div>
+            <div class="seg small" id="theme-seg"><button data-theme-set="auto" type="button">自動</button><button data-theme-set="light" type="button">ライト</button><button data-theme-set="dark" type="button">ダーク</button></div></div>
+          <div class="row"><div><strong>データ</strong><p class="muted" id="data-status">—</p></div>
+            <button class="btn ghost small" id="data-refresh" type="button"><svg><use href="/static/icons/sprite.svg#i-refresh-cw"/></svg>今すぐ更新</button></div>
+          <div class="row"><div><strong>計算エンジン</strong><p class="muted" id="engine-status">—</p></div></div>
+        </section>
+        <section class="card prose">
+          <h3>データとライセンス</h3>
+          <ul>
+            <li>競走馬・競走: <a href="https://ja.wikipedia.org/" target="_blank" rel="noopener">日本語版 Wikipedia</a> の記事 (CC BY-SA 4.0)。各馬の詳細画面から元記事へリンクしています。</li>
+            <li>写真: <a href="https://commons.wikimedia.org/" target="_blank" rel="noopener">Wikimedia Commons</a>。作者とライセンスは各写真に表示しています。</li>
+            <li>競馬場の座標・写真: <a href="https://www.wikidata.org/" target="_blank" rel="noopener">Wikidata</a> (CC0)。</li>
+            <li>天気: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0)。</li>
+            <li>中継: 各競馬場の公式 YouTube チャンネルを YouTube の埋め込み機能で表示。</li>
+            <li>アイコン: <a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide</a> (ISC)。3D: <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a> (MIT)。馬のモデル: <a href="https://quaternius.com/" target="_blank" rel="noopener">Quaternius</a> (CC0)。</li>
+          </ul>
+          <p class="muted">予想とシミュレーションは娯楽と学習のためのものです。馬券の購入は20歳以上、無理のない範囲で。</p>
+        </section>
       </section>
-
-      <!-- ====================================================================
-           VIEW 5: BET SIMULATOR (買い目シミュレータ)
-           ==================================================================== -->
-      <section id="view-simulator" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">買い目・収支シミュレーター (Bet Simulator)</h2>
-          <p class="view-subtitle">オッズと購入金額から的中払戻金・回収率をリアルタイムに計算</p>
-        </div>
-
-        <div class="glass-panel simulator-layout">
-          <div>
-            <div class="sim-input-group">
-              <label>券種を選択</label>
-              <select class="sim-input" id="sim-type-select">
-                <option value="単勝">単勝</option>
-                <option value="複勝">複勝</option>
-                <option value="馬連">馬連</option>
-                <option value="ワイド">ワイド</option>
-                <option value="3連複">3連複</option>
-                <option value="3連単">3連単</option>
-              </select>
-            </div>
-
-            <div class="sim-input-group">
-              <label>オッズ (倍率)</label>
-              <input type="number" step="0.1" value="8.5" class="sim-input" id="sim-odds-input">
-            </div>
-
-            <div class="sim-input-group">
-              <label>購入金額 (円)</label>
-              <input type="number" step="100" value="2000" class="sim-input" id="sim-amount-input">
-            </div>
-
-            <button class="race-btn active" style="width: 100%; padding: 0.75rem;" id="sim-calculate-btn">
-              ⚡ 払戻金をシミュレーション
-            </button>
-          </div>
-
-          <div class="sim-result-card">
-            <span style="font-size: 0.85rem; font-weight: 700; color: var(--color-primary);">的中時の想定払戻金</span>
-            <div class="sim-payout-num" id="sim-payout-display">¥17,000</div>
-            <div style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">
-              回収率: <strong id="sim-return-rate" style="color: var(--status-success); font-size: 1.2rem;">850%</strong> (利益: +¥15,000)
-            </div>
-            <p style="font-size: 0.78rem; color: var(--text-tertiary); line-height: 1.4;">
-              ※ 資金配分機能と併用することで、レースごとの期待値を最大化し、リスクを最小限に抑えた購入計画を策定できます。
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <!-- ====================================================================
-           VIEW 6: SETTINGS & NATIVE ARCHITECTURE (システム状態)
-           ==================================================================== -->
-      <section id="view-settings" class="view-section">
-        <div class="view-header">
-          <h2 class="view-title">システム情報 & ネイティブ連携状態</h2>
-          <p class="view-subtitle">Chimera Linux musl / Kotlin / WebAssembly / Zig / Odin / Cloudflare の稼働状態</p>
-        </div>
-
-        <div class="glass-panel" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
-          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
-            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ WebAssembly (Wasm)</div>
-            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-              <code>native/wasm/keiba_physics.c</code> を clang で wasm 化。直線スパートの位置計算。
-            </p>
-            <span class="engine-status" data-engine="c">確認中…</span>
-          </div>
-
-          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
-            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ Zig モンテカルロコア</div>
-            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-              <code>native/zig/montecarlo.zig</code>。レースを10万回走らせる勝率シミュレーション。
-            </p>
-            <span class="engine-status" data-engine="zig">確認中…</span>
-          </div>
-
-          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
-            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">⚡ Odin 血統解析コア</div>
-            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-              <code>native/odin/pedigree.odin</code>。クロスの血量・Wright 近交係数の計算。
-            </p>
-            <span class="engine-status" data-engine="odin">確認中…</span>
-          </div>
-
-          <div style="background: var(--bg-subtle); padding: 1.25rem; border-radius: 10px; border: 1px solid var(--border-subtle);">
-            <div style="font-weight: 800; font-size: 1.05rem; margin-bottom: 0.35rem;">☁️ Cloudflare Edge & D1</div>
-            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-              Workers + D1 + KV + Static Assets による超高速エッジ配信環境。
-            </p>
-            <span style="font-size: 0.75rem; color: var(--color-primary); font-family: var(--font-mono);">● wrangler.toml & worker.ts Ready</span>
-          </div>
-        </div>
-      </section>
-
     </main>
-
   </div>
 
-  <!-- Login Modal -->
-  <div class="dialog-overlay" id="login-modal" role="dialog" aria-modal="true">
-    <div class="dialog-box">
-      <button class="dialog-close" id="close-login-btn">&times;</button>
-      <h3 style="font-size: 1.3rem; font-weight: 800; text-align: center;">Keiba Vision サインイン</h3>
-      <p style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-top: 0.25rem;">
-        お気に入り馬や予想メモがクラウドで保存・同期されます
-      </p>
-
-      <div class="oauth-vertical-stack">
-        <button class="oauth-entry-btn btn-auth-github" id="login-github-btn">
-          <span>GitHub アカウントでログイン</span>
-        </button>
-        <button class="oauth-entry-btn btn-auth-google" id="login-google-btn">
-          <span>Google アカウントでログイン</span>
-        </button>
-        <button class="oauth-entry-btn btn-auth-demo" id="login-demo-btn">
-          <span>🚀 1クリック デモログイン</span>
-        </button>
-      </div>
-    </div>
+  <!-- 馬の詳細 -->
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <article class="sheet-panel" role="dialog" aria-modal="true" aria-label="競走馬の詳細">
+      <button class="icon-btn sheet-close" data-close type="button" aria-label="閉じる"><svg><use href="/static/icons/sprite.svg#i-x"/></svg></button>
+      <div id="sheet-body"></div>
+    </article>
   </div>
 
-  <!-- Note Modal -->
-  <div class="dialog-overlay" id="note-modal" role="dialog" aria-modal="true">
-    <div class="dialog-box">
-      <button class="dialog-close" id="close-note-btn">&times;</button>
-      <h3 style="font-size: 1.2rem; font-weight: 800;">📝 予想メモ & 買い目記録</h3>
-      <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0.25rem 0 0.85rem;" id="note-race-title"></p>
-      <textarea id="note-textarea" rows="5" style="width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.75rem; font-family: inherit; font-size: 0.85rem; margin-bottom: 1rem; resize: vertical; background: var(--bg-input); color: var(--text-primary);" placeholder="パドック気配、馬場適性の考察、購入買い目を記入..."></textarea>
-      <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
-        <button class="race-btn" id="cancel-note-btn" style="border: 1px solid var(--border-strong);">キャンセル</button>
-        <button class="race-btn active" id="save-note-btn">保存する</button>
-      </div>
-    </div>
-  </div>
+  <dialog class="dialog" id="login-dialog">
+    <form method="dialog">
+      <h3>サインイン</h3>
+      <p class="muted">お気に入りと予想メモを保存できます。デモ用のため、アプリを終了すると消えます。</p>
+      <button class="btn primary wide" value="demo" type="submit"><svg><use href="/static/icons/sprite.svg#i-log-in"/></svg>デモアカウントで続ける</button>
+      <button class="btn ghost wide" value="cancel" type="submit">キャンセル</button>
+    </form>
+  </dialog>
+  <dialog class="dialog" id="note-dialog">
+    <form method="dialog">
+      <h3>予想メモ</h3>
+      <p class="muted" id="note-race"></p>
+      <textarea id="note-text" rows="6" placeholder="パドックの気配、馬場の傾向、買い目など"></textarea>
+      <div class="btn-row end"><button class="btn ghost" value="cancel" type="submit">キャンセル</button><button class="btn primary" value="save" type="submit">保存</button></div>
+    </form>
+  </dialog>
 
-  <script src="/static/app.js"></script>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

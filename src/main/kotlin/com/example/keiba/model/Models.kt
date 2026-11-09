@@ -123,27 +123,6 @@ data class UserProfile(
     val notes: Map<String, String> = emptyMap() // raceId -> memo
 )
 
-@Serializable
-data class LegendaryHorse(
-    val id: String,
-    val name: String,
-    val kana: String,
-    val title: String,
-    val birthYear: Int,
-    val color: String,
-    val record: String, // e.g. 10戦8勝 (G1 6勝)
-    val totalEarnings: String, // e.g. 22億1,544万円
-    val sire: String,
-    val dam: String,
-    val majorWins: List<String>,
-    val description: String,
-    val iconEmoji: String,
-    val speedRadar: Int,
-    val staminaRadar: Int,
-    val powerRadar: Int,
-    val spiritRadar: Int,
-    val agilityRadar: Int
-)
 
 @Serializable
 data class PedigreeLineage(
@@ -158,19 +137,6 @@ data class PedigreeLineage(
     val representativeHorses: List<String>
 )
 
-@Serializable
-data class RacecourseGuide(
-    val id: String,
-    val name: String,
-    val location: String,
-    val straightLengthMeters: Double,
-    val elevationDiffMeters: Double,
-    val slopeCharacteristic: String,
-    val keyFeature: String,
-    val courseDiagramAscii: String,
-    val turn: String, // "右" / "左"
-    val elevationProfile: List<Double> // 向こう正面→ゴールの高さ (m, 模式)
-)
 
 
 @Serializable

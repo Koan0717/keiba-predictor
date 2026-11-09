@@ -1,0 +1,96 @@
+package com.example.keiba.model
+
+import kotlinx.serialization.Serializable
+
+/** 日本語版 Wikipedia の {{競走馬}} 記事 1 件 */
+@Serializable
+data class HorseEntry(
+    val title: String,              // 記事名 (一意キー)
+    val name: String,
+    val nameEn: String = "",
+    val image: String? = null,      // Wikimedia Commons のファイル名
+    val imageCaption: String = "",
+    val sex: String = "",
+    val color: String = "",         // 毛色
+    val breed: String = "",
+    val birthYear: Int? = null,
+    val deathYear: Int? = null,
+    val sire: String = "",
+    val dam: String = "",
+    val damSire: String = "",
+    val breeder: String = "",
+    val country: String = "",
+    val owner: String = "",
+    val trainer: String = "",
+    val starts: Int? = null,
+    val wins: Int? = null,
+    val recordText: String = "",
+    val earningsText: String = "",
+    val earningsManYen: Long? = null, // 円建ての賞金のみ (万円)
+    val honors: String = "",
+    val bigWins: List<BigWin> = emptyList()
+)
+
+@Serializable
+data class BigWin(val grade: String, val race: String)
+
+/** 日本語版 Wikipedia の {{競馬の競走}} 記事 1 件 */
+@Serializable
+data class RaceEntry(
+    val title: String,
+    val name: String,
+    val nameEn: String = "",
+    val course: String = "",        // 競馬場 (例: 東京競馬場)
+    val surface: String = "",       // 芝 / ダート / 障害
+    val distance: Int? = null,
+    val grade: String = "",
+    val prize: String = "",
+    val founded: String = "",
+    val season: String = "",
+    val organizer: String = "",
+    val condition: String = "",
+    val image: String? = null
+)
+
+/** 現役の競馬場 (中央 10 + 地方 15) */
+@Serializable
+data class Racecourse(
+    val id: String,
+    val name: String,
+    val short: String,
+    val qid: String,
+    val organizer: String,          // JRA / 地方 (主催者名)
+    val category: String,           // 中央 / 地方 / ばんえい
+    val region: String,
+    val turn: String,               // 右 / 左 / 直線
+    val surfaces: String,           // 芝・ダート など
+    val straightMeters: Double,     // 最後の直線 (参考値)
+    val note: String,
+    val website: String,
+    val youtubeChannel: String? = null,
+    val youtubeLabel: String = "",
+    val lat: Double? = null,
+    val lon: Double? = null,
+    val image: String? = null,
+    val elevationProfile: List<Double> = emptyList()
+)
+
+@Serializable
+data class LibrarySnapshot(
+    val generatedAt: String,
+    val horses: List<HorseEntry>,
+    val races: List<RaceEntry>,
+    val courseMedia: Map<String, CourseMedia> = emptyMap()
+)
+
+@Serializable
+data class CourseMedia(val lat: Double? = null, val lon: Double? = null, val image: String? = null)
+
+@Serializable
+data class MediaCredit(
+    val file: String,
+    val thumbUrl: String? = null,
+    val pageUrl: String? = null,
+    val artist: String = "",
+    val license: String = ""
+)

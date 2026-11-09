@@ -216,7 +216,7 @@ class PredictorEngine {
                 oddsEstimate = honmeiHorse.odds,
                 confidence = if (honmei.totalScore >= 88.0) "S" else "A",
                 allocationPercent = 35,
-                reason = "AI総合スコア1位。指数・展開ともに抜けており最も信頼度が高い本命馬。"
+                reason = "総合スコア1位。指数・展開ともに抜けており最も信頼度が高い本命馬。"
             )
         )
 
@@ -260,7 +260,7 @@ class PredictorEngine {
                     oddsEstimate = (anaHorse.odds * 1.8).coerceAtLeast(6.5),
                     confidence = "B+",
                     allocationPercent = 10,
-                    reason = "AI妙味度指数が急上昇している☆穴馬への特選バリュー狙い。"
+                    reason = "オッズに対して評価が高い☆の馬を相手に。"
                 )
             )
         }

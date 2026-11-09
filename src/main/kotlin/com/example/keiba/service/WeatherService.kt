@@ -40,7 +40,15 @@ class WeatherService {
         "小倉" to Pair(33.8436, 130.8753)
     )
 
-    suspend fun getWeatherForRacecourse(racecourseName: String): WeatherInfo = withContext(Dispatchers.IO) {
+    private val singleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, WeatherInfo>>()
+
+    /** 10 分キャッシュ付き */
+    suspend fun getWeatherForRacecourse(racecourseName: String): WeatherInfo {
+        singleCache[racecourseName]?.let { (at, w) -> if (System.currentTimeMillis() - at < 10 * 60_000) return w }
+        return fetchWeather(racecourseName).also { if (it.isLive) singleCache[racecourseName] = System.currentTimeMillis() to it }
+    }
+
+    private suspend fun fetchWeather(racecourseName: String): WeatherInfo = withContext(Dispatchers.IO) {
         val coords = racecourseCoordinates[racecourseName] ?: Pair(35.7264, 139.9603)
         try {
             val url = "https://api.open-meteo.com/v1/forecast?latitude=${coords.first}&longitude=${coords.second}&current=temperature_2m,precipitation,weather_code,wind_speed_10m"
@@ -77,7 +85,7 @@ class WeatherService {
             location = "${racecourseName}競馬場 (推定)",
             temperatureC = 17.5,
             weatherDescription = "晴れ時々曇り",
-            weatherIcon = "☀️",
+            weatherIcon = "sun",
             windSpeedKmh = 11.2,
             precipitationMm = 0.0,
             trackConditionEstimate = TrackCondition.FIRM,
@@ -85,16 +93,49 @@ class WeatherService {
         )
     }
 
+
+    /** 複数地点の現在の天気を 1 回のリクエストで (Open-Meteo は座標をカンマ区切りで複数指定できる) */
+    @kotlinx.serialization.Serializable
+    data class Current(val id: String, val temperatureC: Double, val description: String, val icon: String,
+                       val windKmh: Double, val precipitationMm: Double, val trackCondition: TrackCondition)
+
+    @Volatile private var multiCache: Pair<Long, List<Current>>? = null
+
+    suspend fun currentFor(points: List<Triple<String, Double, Double>>): List<Current> = withContext(Dispatchers.IO) {
+        multiCache?.let { (at, v) -> if (System.currentTimeMillis() - at < 10 * 60_000) return@withContext v }
+        if (points.isEmpty()) return@withContext emptyList()
+        try {
+            val url = "https://api.open-meteo.com/v1/forecast?latitude=${points.joinToString(",") { "%.4f".format(java.util.Locale.ROOT, it.second) }}" +
+                "&longitude=${points.joinToString(",") { "%.4f".format(java.util.Locale.ROOT, it.third) }}" +
+                "&current=temperature_2m,precipitation,weather_code,wind_speed_10m&timezone=Asia%2FTokyo"
+            val root = json.parseToJsonElement(client.get(url) { timeout { requestTimeoutMillis = 8000 } }.bodyAsText())
+            val arr = if (root is kotlinx.serialization.json.JsonArray) root else kotlinx.serialization.json.JsonArray(listOf(root))
+            val result = arr.mapIndexed { i, el ->
+                val c = el.jsonObject["current"]!!.jsonObject
+                val precip = c["precipitation"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+                val (desc, icon, cond) = interpretWeatherCode(c["weather_code"]?.jsonPrimitive?.doubleOrNull?.toInt() ?: 0, precip)
+                Current(points[i].first, c["temperature_2m"]?.jsonPrimitive?.doubleOrNull ?: 0.0, desc, icon,
+                    c["wind_speed_10m"]?.jsonPrimitive?.doubleOrNull ?: 0.0, precip, cond)
+            }
+            multiCache = System.currentTimeMillis() to result
+            result
+        } catch (e: Exception) {
+            logger.warn("Open-Meteo (複数地点) の取得に失敗: ${e.message}")
+            multiCache?.second ?: emptyList()
+        }
+    }
+
     private fun interpretWeatherCode(code: Int, precip: Double): Triple<String, String, TrackCondition> {
         return when (code) {
-            0 -> Triple("快晴", "☀️", TrackCondition.FIRM)
-            1, 2 -> Triple("晴れ・薄曇り", "⛅", TrackCondition.FIRM)
-            3 -> Triple("曇り", "☁️", TrackCondition.FIRM)
-            45, 48 -> Triple("霧", "🌫️", TrackCondition.GOOD)
-            51, 53, 55 -> Triple("小雨", "🌦️", if (precip > 1.5) TrackCondition.YIELDING else TrackCondition.GOOD)
-            61, 63, 65 -> Triple("雨", "🌧️", TrackCondition.YIELDING)
-            80, 81, 82 -> Triple("強い雨", "⛈️", TrackCondition.SOFT)
-            else -> Triple("曇り", "⛅", TrackCondition.FIRM)
+            0 -> Triple("快晴", "sun", TrackCondition.FIRM)
+            1, 2 -> Triple("晴れ", "cloud-sun", TrackCondition.FIRM)
+            3 -> Triple("曇り", "cloud", TrackCondition.FIRM)
+            45, 48 -> Triple("霧", "cloud-fog", TrackCondition.GOOD)
+            51, 53, 55 -> Triple("小雨", "cloud-drizzle", if (precip > 1.5) TrackCondition.YIELDING else TrackCondition.GOOD)
+            71, 73, 75, 77, 85, 86 -> Triple("雪", "cloud-snow", TrackCondition.YIELDING)
+            61, 63, 65 -> Triple("雨", "cloud-rain", TrackCondition.YIELDING)
+            80, 81, 82 -> Triple("強い雨", "cloud-lightning", TrackCondition.SOFT)
+            else -> Triple("曇り", "cloud", TrackCondition.FIRM)
         }
     }
 }
