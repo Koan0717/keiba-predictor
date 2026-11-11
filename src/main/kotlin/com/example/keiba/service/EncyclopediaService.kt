@@ -4,6 +4,10 @@ import com.example.keiba.model.CoatColor
 import com.example.keiba.model.HorseBreed
 import com.example.keiba.model.PedigreeLineage
 
+// ==================================================================================
+// EncyclopediaService — 血統・品種・毛色の解説データ (アプリに書き込んだ固定の文章)
+// ==================================================================================
+// 名鑑 (Wikipedia 由来) と違い、このデータは自動更新されない。
 class EncyclopediaService {
 
     fun getPedigreeLineages(): List<PedigreeLineage> = listOf(

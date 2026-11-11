@@ -5,6 +5,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.slf4j.LoggerFactory
 
+// ==================================================================================
+// RaceService — レース予想画面で使うサンプル出馬表 (有馬記念・日本ダービー・ジャパンカップ)
+// ==================================================================================
+// 出馬表やオッズを無料で合法に取れる API がないため、アプリ内に固定のデータを持っている。
 class RaceService(
     private val weatherService: WeatherService = WeatherService(),
     private val predictorEngine: PredictorEngine = PredictorEngine()
@@ -115,6 +119,7 @@ class RaceService(
     /** 一覧 (タブ表示用) は天気を待たずに返す */
     fun getAllRacesSummary(): List<Race> = races.values.toList()
 
+    // 現地の天気を取り、推定の馬場状態をレースに反映してから予想する。
     suspend fun getRaceAnalysis(raceId: String): RaceAnalysis? = coroutineScope {
         val baseRace = races[raceId] ?: return@coroutineScope null
         val weather = weatherService.getWeatherForRacecourse(baseRace.racecourse)

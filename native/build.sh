@@ -6,6 +6,8 @@
 #   C    : clang + wasm-ld (LLVM)
 #   Zig  : zig 0.15 以降
 #   Odin : odin (dev-2025 以降) + wasm-ld
+# set -e: どれかのコマンドが失敗したら、そこで止める (壊れた .wasm を作らないように)。
+# cd "$(dirname "$0")": どこから実行しても、このスクリプトがあるフォルダを基準にする。
 set -e
 cd "$(dirname "$0")"
 OUT=../src/main/resources/static/wasm
@@ -19,6 +21,9 @@ else
   echo "… clang が無いので C はスキップ"
 fi
 
+# -fno-entry : main 関数がない (ライブラリとして使う) ことを伝える
+# -rdynamic  : export fn を外から見える関数として残す
+# ReleaseSmall: できるだけ小さいファイルにする最適化
 if command -v zig >/dev/null 2>&1; then
   echo "▶ Zig  → montecarlo.wasm (テスト実行後)"
   (cd zig && zig test montecarlo.zig)

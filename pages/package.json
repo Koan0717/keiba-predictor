@@ -1,0 +1,17 @@
+{
+  "name": "keiba-vision-pages",
+  "private": true,
+  "description": "Keiba Vision を Cloudflare Pages で公開するためのビルドとデプロイ",
+  "scripts": {
+    "build": "sh build.sh",
+    "dev": "wrangler pages dev",
+    "deploy": "sh build.sh && wrangler pages deploy",
+    "test": "node test-functions.mjs",
+    "db:migrate": "wrangler d1 migrations apply keiba-vision-db --remote",
+    "data:upload": "sh upload-data.sh"
+  },
+  "devDependencies": {
+    "wrangler": "4.159.0"
+  },
+  "type": "module"
+}

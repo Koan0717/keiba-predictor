@@ -20,3 +20,8 @@ cloudflare/.dev.vars
 *.iml
 .DS_Store
 Thumbs.db
+
+# Cloudflare Pages
+pages/dist/
+pages/node_modules/
+pages/.wrangler/

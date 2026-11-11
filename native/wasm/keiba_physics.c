@@ -1,6 +1,8 @@
 // WebAssembly Acceleration Module for Keiba Vision
 // High-performance stretch run physics & expected value computation
 
+// WASM_EXPORT を付けた関数は、WebAssembly の外 (JS) から呼べるようになる。
+// ビルド: clang --target=wasm32 -nostdlib (標準ライブラリなし。native/build.sh を参照)
 #define WASM_EXPORT __attribute__((visibility("default")))
 
 // Calculates horse final stretch position (0.0 to 100.0) based on physics parameters
@@ -35,6 +37,9 @@ float calculate_stretch_pos(
 
 // Ultra-fast Expected Value & Anomaly Score
 WASM_EXPORT
+// 期待値の目安: (勝率 / 100) × オッズ。1.0 なら「賭けた額が平均で戻ってくる」水準。
+// 画面で見やすいよう 75 倍して 0〜100 の指数にする (1.33 以上は 100 で頭打ち)。
+// レース予想画面の出馬表「妙味」列で使っている。
 float calculate_ev_index(float odds, float win_prob) {
     if (odds <= 0.0f || win_prob <= 0.0f) return 0.0f;
     float ev = (win_prob / 100.0f) * odds;

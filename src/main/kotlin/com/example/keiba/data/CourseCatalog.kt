@@ -8,11 +8,17 @@ import com.example.keiba.model.Racecourse
  * YouTube チャンネルは各競馬場の公式サイトからリンクされている公式チャンネル。
  */
 object CourseCatalog {
+    // YouTube のチャンネル ID ("UC" で始まる 24 文字)。中継画面で埋め込み URL を作るのに使う。
+    // 中央 10 場はすべて JRA 公式チャンネルを表示する。
     private const val JRA_YT = "UCj6AKkCWS6FJqf0o5wP45eQ"
+    // jra() / nar() は、同じ項目の繰り返しを減らすための小さな作成関数。
+    // id は URL やシミュレーションで使う英字の識別子、qid は Wikidata の ID (座標と写真の取得に使う)。
+    // profile は高低差 (m) を向こう正面からゴールまで等間隔に並べた模式データ (分かっている 4 場だけ)。
     private fun jra(id: String, short: String, qid: String, region: String, turn: String, straight: Double, note: String, profile: List<Double> = emptyList()) =
         Racecourse(id, "${short}競馬場", short, qid, "日本中央競馬会 (JRA)", "中央", region, turn, "芝・ダート", straight, note,
             "https://www.jra.go.jp/facilities/race/$id/", JRA_YT, "JRA公式チャンネル", elevationProfile = profile)
 
+    // yt = null の場 (園田・姫路・高知) は YouTube の公式ライブが見つからなかったので、公式サイトへ案内する。
     private fun nar(id: String, short: String, qid: String, organizer: String, region: String, turn: String, straight: Double, note: String,
                     web: String, yt: String?, ytLabel: String, surfaces: String = "ダート", category: String = "地方") =
         Racecourse(id, "${short}競馬場", short, qid, organizer, category, region, turn, surfaces, straight, note, web, yt, ytLabel)

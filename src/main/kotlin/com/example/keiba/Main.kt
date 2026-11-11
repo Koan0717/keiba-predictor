@@ -20,19 +20,33 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 import org.slf4j.LoggerFactory
 import java.awt.Desktop
 import java.net.URI
 
 @Serializable
+// ==================================================================================
+// Main.kt — アプリの入口。Web サーバー (Ktor + Netty) を起動し、URL ごとの処理を決める
+// ==================================================================================
+// 全体の構成:
+//   ブラウザ ──(HTTP)──> このサーバー ──> 各 Service (データの取得・計算)
+//   - /           … 画面 (static/index.html) を返す
+//   - /static/... … CSS / JS / 画像 / 3D モデル / WebAssembly を返す
+//   - /api/...    … JSON データを返す (画面の JS が fetch で呼ぶ)
+// サーバーは「自分のパソコンの中だけ」で動き、ブラウザが http://localhost:8080 に接続する。
+//
+// 以下の 3 つは、ブラウザから POST される JSON の形 (受け取り用の型)。
 data class FavoriteRequest(val horseName: String)
 
 @Serializable
 data class NoteRequest(val raceId: String, val note: String)
 
 @Serializable
+// 名鑑の詳細 API の返り値: 馬のデータ + Wikipedia の要約文 (取れなければ null)。
 data class HorseDetail(val view: HorseView, val summary: String?)
 
+// プログラムの開始地点。`./gradlew run` やビルド済みの bin/keiba-predictor から呼ばれる。
 fun main(args: Array<String>) {
     // `--sync <dir>`: Wikipedia から最新データを取り、<dir>/library.json.gz に書いて終了 (同梱データの作成用)
     if (args.firstOrNull() == "--sync") {
@@ -46,6 +60,16 @@ fun main(args: Array<String>) {
         return
     }
 
+    // --- 各サービスを 1 つずつ作る (アプリ全体で共有する) ---
+    // LibraryService は作った時点で同梱データを読み込み、古ければ裏で Wikipedia から更新を始める。
+    // RaceService には天気サービスを渡し、同じキャッシュを共有させる。
+    // `--export <dir>`: Cloudflare Pages 用に、API の中身を JSON ファイルとして書き出して終了
+    // (Pages では Kotlin が動かないため、データは静的ファイルにし、検索は Pages Functions が行う)
+    if (args.firstOrNull() == "--export") {
+        exportStatic(java.io.File(args.getOrNull(1) ?: "pages/dist/data"))
+        return
+    }
+
     val weatherService = WeatherService()
     val library = LibraryService().also { it.refreshIfStale() }
     val raceService = RaceService(weatherService)
@@ -53,6 +77,8 @@ fun main(args: Array<String>) {
     val encyclopediaService = com.example.keiba.service.EncyclopediaService()
 
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
+    // 0.0.0.0 = このパソコンのすべてのネットワークで待ち受ける。
+    // 自分だけで使うなら "127.0.0.1" でもよいが、同じ Wi-Fi のスマホから見られるようにこの設定にしている。
     val host = "0.0.0.0"
 
     println("==================================================")
@@ -62,6 +88,9 @@ fun main(args: Array<String>) {
     println("==================================================")
 
     val server = embeddedServer(Netty, port = port, host = host) {
+        // ContentNegotiation: call.respond(Kotlin のオブジェクト) を自動で JSON に変換する仕組み。
+        // encodeDefaults = true がないと、空文字やデフォルト値のフィールドが JSON から省略され、
+        // 画面側の JS で undefined になってエラーの原因になる。
         install(ContentNegotiation) {
             json(Json {
                 prettyPrint = false
@@ -71,6 +100,8 @@ fun main(args: Array<String>) {
             })
         }
 
+        // CORS: 別のサイト (別のポート) の画面からこの API を呼べるようにする設定。
+        // Cloudflare 版の画面など、別の場所から開いた場合に必要。
         install(CORS) {
             anyHost()
             allowHeader(HttpHeaders.ContentType)
@@ -83,6 +114,8 @@ fun main(args: Array<String>) {
 
         routing {
             // Wasm モジュールの明示的配信 (Content-Type: application/wasm) - staticResources より先に評価
+            // WebAssembly は Content-Type が application/wasm でないとブラウザが高速な読み込み方法を使えないため、
+            // .wasm だけはここで明示的に返す。下の staticResources より先に書くことで、こちらが優先される。
             get("/static/wasm/{fileName}") {
                 val fileName = call.parameters["fileName"] ?: return@get call.respond(HttpStatusCode.BadRequest)
                 val stream = Thread.currentThread().contextClassLoader.getResourceAsStream("static/wasm/$fileName")
@@ -95,6 +128,7 @@ fun main(args: Array<String>) {
             }
 
             // 静的アセットの提供
+            // src/main/resources/static/ 以下のファイル (CSS, JS, アイコン, 3D モデルなど) をそのまま返す。
             staticResources("/static", "static")
 
             // トップページ
@@ -115,6 +149,8 @@ fun main(args: Array<String>) {
                 library.refresh()
                 call.respond(library.status())
             }
+            // 名鑑の検索。例: /api/horses?q=オグリ&sort=rating&photo=1&offset=0&limit=48
+            // 数値に変換できない値が来ても落ちないよう、toIntOrNull() ?: 既定値 にしている。
             get("/api/horses") {
                 val q = call.request.queryParameters
                 call.respond(library.searchHorses(
@@ -122,6 +158,7 @@ fun main(args: Array<String>) {
                     q["offset"]?.toIntOrNull() ?: 0, q["limit"]?.toIntOrNull() ?: 48
                 ))
             }
+            // 馬の詳細。記事名 (title) が必須で、なければ 400、名鑑にいなければ 404 を返す。
             get("/api/horses/detail") {
                 val title = call.request.queryParameters["title"] ?: return@get call.respond(HttpStatusCode.BadRequest)
                 val view = library.horse(title) ?: return@get call.respond(HttpStatusCode.NotFound)
@@ -135,10 +172,14 @@ fun main(args: Array<String>) {
                 ))
             }
             get("/api/courses") { call.respond(library.courses()) }
+            // 25 場の座標を Open-Meteo にまとめて渡し、現在の天気を 1 回のリクエストで取る。
+            // 座標が分からない競馬場は除外する。
             get("/api/weather") {
                 val points = library.courses().mapNotNull { c -> if (c.lat != null && c.lon != null) Triple(c.id, c.lat, c.lon) else null }
                 call.respond(weatherService.currentFor(points))
             }
+            // 写真の作者・ライセンス。files は "A.jpg|B.jpg" のように "|" 区切り。
+            // 一度に大量に問い合わせられないよう、最大 100 件で切る。
             get("/api/media") {
                 val files = call.request.queryParameters["files"]?.split("|")?.filter { it.isNotBlank() }?.take(100) ?: emptyList()
                 call.respond(library.credits(files))
@@ -159,6 +200,7 @@ fun main(args: Array<String>) {
             }
 
             // 競馬データ API
+            // レース予想 (アプリ内蔵のサンプル出馬表 3 レース)。
             route("/api/races") {
                 get {
                     val list = raceService.getAllRacesSummary()
@@ -187,6 +229,9 @@ fun main(args: Array<String>) {
             }
 
             // 認証 & ユーザーセッション API
+            // サインイン (デモ)。サインインすると "keiba_session" という Cookie にランダムな合言葉 (トークン) を入れ、
+            // 以降のリクエストではその Cookie でユーザーを見分ける。
+            // httpOnly = true にすると、ページの JavaScript から Cookie を読めなくなる (盗まれにくくなる)。
             route("/api/auth") {
                 get("me") {
                     val token = call.request.cookies["keiba_session"]
@@ -264,6 +309,7 @@ fun main(args: Array<String>) {
         }
     }
 
+    // wait = false: サーバーを裏で動かしたまま、次の行 (ブラウザを開く処理) に進む。
     server.start(wait = false)
 
     println("Keiba Vision を起動しました")
@@ -274,12 +320,20 @@ fun main(args: Array<String>) {
     if (System.getenv("NO_BROWSER") == null) openBrowserAcrossPlatforms("http://localhost:$port")
 
     // メインスレッド維持
+    // 自分自身の終了を待つ = 永遠に待つ。これがないと main が終わってプログラムが終了してしまう。
+    // Ctrl + C で止めるまでサーバーは動き続ける。
     Thread.currentThread().join()
 }
 
 /**
  * Chimera Linux (musl libc), Arch Linux, Windows のすべてで確実にブラウザを起動するマルチフォールバック関数
  */
+// OS ごとに「既定のブラウザで URL を開く」方法が違うので、順番に試す。
+//   Windows : rundll32 (失敗したら cmd /c start)
+//   Linux   : xdg-open → gio → x-www-browser → firefox → chromium (最初に成功したもの)
+//   macOS   : open
+//   最後の手段: Java 標準の Desktop.browse
+// どれも失敗したら、手動で開くよう案内を表示するだけでアプリは止めない。
 fun openBrowserAcrossPlatforms(url: String) {
     try {
         Thread.sleep(1200) // サーバー起動待機
@@ -332,4 +386,26 @@ fun openBrowserAcrossPlatforms(url: String) {
     } catch (e: Exception) {
         println("ブラウザの自動オープンをスキップしました (手動で開いてください: $url): ${e.message}")
     }
+}
+
+/** Pages 用の静的データを書き出す。ファイル名は pages/functions/api/[[path]].ts が読む名前と一致させる */
+fun exportStatic(dir: java.io.File) = runBlocking {
+    val json = Json { encodeDefaults = true }
+    val library = LibraryService()
+    val races = RaceService(WeatherService())
+    val encyclopedia = com.example.keiba.service.EncyclopediaService()
+    dir.mkdirs()
+    fun write(name: String, text: String) = java.io.File(dir, name).writeText(text)
+    write("horses.json", json.encodeToString(library.allHorses()))
+    write("races-catalog.json", json.encodeToString(library.allRaces()))
+    write("courses.json", json.encodeToString(library.courses()))
+    write("status.json", json.encodeToString(library.status()))
+    write("pedigree.json", json.encodeToString(encyclopedia.getPedigreeLineages()))
+    write("breeds.json", json.encodeToString(encyclopedia.getBreeds()))
+    write("coats.json", json.encodeToString(encyclopedia.getCoatColors()))
+    val sample = races.getAllRacesSummary()
+    write("races.json", json.encodeToString(sample))
+    // 予想は書き出した時点の天気で計算する
+    sample.forEach { r -> races.getRaceAnalysis(r.id)?.let { write("analysis-${r.id}.json", json.encodeToString(it)) } }
+    println("書き出し完了: ${dir.absolutePath} (${dir.list()?.size} ファイル)")
 }

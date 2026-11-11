@@ -3,6 +3,8 @@
 全国25の競馬場、5,800頭を超える競走馬の名鑑、3Dのレースシミュレーション、各競馬場の公式中継をひとつにまとめた競馬アプリです。
 本体は **Kotlin** で、重い計算の一部を **Zig・Odin・C** で書いて **WebAssembly** に変換し、ブラウザの中で動かしています。
 
+**Web 版 (インストール不要): https://keiba-vision.pages.dev**
+
 ![ホーム (ライト)](docs/screenshots/home-light.jpg)
 
 > [!NOTE]
@@ -438,6 +440,33 @@ keiba-predictor/
 テストの実行: `./gradlew test` (Kotlin) / `cd native/zig && zig test montecarlo.zig` (Zig)
 
 ---
+
+## Web 版 (Cloudflare Pages)
+
+<https://keiba-vision.pages.dev> で公開しています。Pages では Kotlin が動かないため、次の構成にしています。
+
+| 部分 | 中身 |
+|---|---|
+| 画面 | Kotlin 版と同じ `index.html` / CSS / JS / 3D モデル / WebAssembly |
+| データ | Kotlin の `--export` で書き出した JSON (`pages/dist/data/`) |
+| API | `pages/functions/api/[[path]].ts` (Pages Functions)。検索・並び替えは Kotlin 版と同じルール。天気・写真のクレジット・要約は Open-Meteo / Wikipedia をその場で呼ぶ |
+
+Web 版の違い:
+- サインイン・お気に入り・予想メモは使えません (保存場所のサーバーがないため)
+- 名鑑などのデータは公開した時点のもの (設定画面の「今すぐ更新」は効きません)。レース予想の天気も公開時点のものです
+
+**更新して公開し直す手順** (Cloudflare のアカウントが必要):
+
+```sh
+cd pages
+npm install
+npx wrangler login        # 初回だけ。ブラウザで Cloudflare にログイン
+npm run build             # dist/ を作る (Kotlin のビルドとデータの書き出しを含む)
+npm test                  # Pages Functions の自己チェック (Node で動く)
+npm run deploy            # Cloudflare Pages に公開
+```
+
+`npx wrangler pages dev` でローカル確認もできますが、glibc の Linux / macOS / Windows が必要です (musl の Chimera Linux では動きません)。
 
 ## GitHub Actions
 

@@ -5,8 +5,14 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+// ==================================================================================
+// PredictorEngine — サンプル出馬表から「印」と「買い目」を作る予想ロジック
+// ==================================================================================
+// 流れ: ペース予想 → 各馬の総合スコア → スコア順に印 (◎◯▲△☆) → 印から買い目
+// 各要素の重み (0.35 など) は経験則で決めた値で、統計的に最適化したものではない。
 class PredictorEngine {
 
+    // 1 レース分の予想をまとめて作る。RaceService.getRaceAnalysis() から呼ばれる。
     fun analyzeRace(race: Race): RaceAnalysis {
         val paceForecast = analyzePace(race.horses)
         val paceComment = when (paceForecast) {
@@ -57,6 +63,8 @@ class PredictorEngine {
         )
     }
 
+    // 逃げ・先行の頭数からペースを予想する。
+    // 逃げ馬が 2 頭以上いると先頭争いで速くなる (ハイ)、逃げ馬がいない/少ないと遅くなる (スロー)。
     private fun analyzePace(horses: List<Horse>): String {
         val nigeCount = horses.count { it.runningStyle == RunningStyle.NIGE }
         val senkoCount = horses.count { it.runningStyle == RunningStyle.SENKO }
@@ -68,6 +76,8 @@ class PredictorEngine {
         }
     }
 
+    // 1 頭の総合スコア (15〜99.5) と、勝率・複勝率・期待値の目安を計算する。
+    // すべての要素を 0〜100 の点数に揃えてから、重みを掛けて足し合わせる (加重平均)。
     private fun calculateHorseScore(horse: Horse, race: Race, paceForecast: String): PredictionScore {
         // 1. スピードスコア (60-120 -> 0-100に正規化)
         val speedScore = ((horse.speedIndex - 60.0) / 60.0 * 100.0).coerceIn(10.0, 98.0)
@@ -175,6 +185,7 @@ class PredictorEngine {
         )
     }
 
+    // 条件に当てはまる短評を並べて 1 文にする。
     private fun generateComment(horse: Horse, paceScore: Double, pedigreeScore: Double, training: String): String {
         val parts = mutableListOf<String>()
         if (training == "S" || training == "A+") {
@@ -199,6 +210,8 @@ class PredictorEngine {
         }
     }
 
+    // 印の付いた馬から 4 種類の買い目を作る。allocationPercent は予算の配分 (合計 100%)。
+    // 想定オッズは単勝オッズからの大まかな見積もりで、実際の配当とは異なる。
     private fun generateBetRecommendations(race: Race, predictions: List<PredictionScore>): List<BetRecommendation> {
         val honmei = predictions.firstOrNull { it.mark == "◎" } ?: predictions[0]
         val taiko = predictions.firstOrNull { it.mark == "◯" } ?: predictions.getOrNull(1)

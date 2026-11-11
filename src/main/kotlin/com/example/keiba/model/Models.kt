@@ -3,6 +3,11 @@ package com.example.keiba.model
 import kotlinx.serialization.Serializable
 
 @Serializable
+// ==================================================================================
+// Models.kt — サーバーと画面の間でやりとりするデータの形
+// ==================================================================================
+// @Serializable を付けたクラスは、そのまま JSON に変換して画面に返せる。
+// enum はブラウザ側では "TURF" "FIRM" のような文字列として届く。
 enum class CourseType {
     TURF, // 芝
     DIRT  // ダート
@@ -25,6 +30,7 @@ enum class RunningStyle {
 }
 
 @Serializable
+// レース予想 (サンプル出馬表) の 1 頭分。名鑑の馬は model/Library.kt の HorseEntry。
 data class Horse(
     val horseNumber: Int,
     val postPosition: Int, // 枠番 (1-8)

@@ -16,6 +16,11 @@ import org.slf4j.LoggerFactory
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+// ==================================================================================
+// AuthService — デモ用のサインイン・お気に入り・予想メモ
+// ==================================================================================
+// データはメモリ (sessions) にだけ持つので、アプリを終了すると消える。
+// 本物の GitHub / Google 連携はしていない (環境変数の読み込みだけが残っている)。
 class AuthService {
     private val logger = LoggerFactory.getLogger(AuthService::class.java)
 

@@ -1,17 +1,40 @@
 // 3D レースシミュレーション (three.js)
 // 着順と各馬の「出来」は呼び出し側 (Zig wasm) が決め、ここでは走りを映像にする。
 
+// しくみの概要:
+//   1. setup()  … コース・建物・出走馬 (3D モデル) を作り、各馬の「走破タイム T」を決める
+//   2. start()  … 時計を動かす
+//   3. frame()  … 毎フレーム (1 秒に約 60 回) 呼ばれ、時刻 t における各馬の位置を計算して描画する
+// 各馬の位置は「物理シミュレーション」ではなく、ゴール時刻 T から逆算した数式 (progress) で決める。
+// これにより、Zig が決めた着順どおりに必ずゴールし、途中の展開 (逃げ・追込) も表現できる。
+//
+// "three" は index.html の importmap で /static/vendor/three.module.min.js を指している。
 import * as THREE from "three";
 import { GLTFLoader } from "/static/vendor/GLTFLoader.js";
 import { clone as cloneSkinned } from "/static/vendor/SkeletonUtils.js";
 import { OrbitControls } from "/static/vendor/OrbitControls.js";
 import { coatOf, margin } from "./util.js";
 
+// 距離の単位はすべて「メートル」。3D 空間の 1 単位 = 1m として扱う。
 const TRACK_W = 24;          // コース幅 (m)
 const HORSE_LEN = 2.5;       // 馬の体長 (m)
+// 脚質ごとの「前半の前への出方」。正なら序盤に前へ行き (逃げ・先行)、負なら序盤は後ろにいて終盤に伸びる。
+// progress() の式 u + shape * u * (1 - u) の shape に使う。
 const STYLE_SHAPE = [0.14, 0.07, -0.05, -0.12]; // 逃げ・先行・差し・追込: 序盤にどれだけ前へ行くか
 
 /** スタジアム型 (直線2本 + 半円2つ) のコース。s = 1周の中での位置 (m) */
+// --- コースの形 ---
+// 実際の競馬場は複雑な形だが、ここでは「直線 2 本 + 半円 2 つ」の陸上トラック型で近似する。
+//   S = 直線の長さ (競馬場ごとの「最後の直線」の値)
+//   R = コーナーの半径 (直線が長い競馬場ほど少し大きく: 110 + 0.1 * S)
+//   L = 1 周の長さ = 2S + 2πR
+// s (0〜L) は「1 周の中の位置」、off は「内ラチから外へ何 m か」。
+// 上から見た配置 (左回りの場合):
+//     ┌──── 向こう正面 (z = -R) ← ────┐
+//     ↓                                ↑   ← 右のコーナー中心 (S/2, 0)
+//     └──── ホームストレッチ (z = +R) → ┘     ゴールはここ (スタンド側)
+// 右回りの競馬場は x 座標を反転 (mirror = -1) して作る。
+// ばんえい (帯広) は直線コースだけ (straightOnly)。
 class Track {
   constructor(straight, turn) {
     this.straightOnly = turn === "直線";
@@ -22,6 +45,13 @@ class Track {
     this.finish = this.straightOnly ? this.S * 0.9 : this.S * 0.85;
   }
   /** 位置 s、内ラチからの距離 off における座標と進行方向 */
+  // 位置 s・内ラチから off m の点の座標 (x, z) と、進行方向の単位ベクトル (dx, dz) を返す。
+  // s を L で割った余りにするので、1 周以上の距離 (3000m など) でも同じ式で扱える。
+  //   0 ≤ s < S        : ホームストレッチ (+x 方向へ進む)
+  //   S ≤ s < S+πR     : 1・2 コーナー (角度 p を 90° から -90° へ減らしながら半円を描く)
+  //   S+πR ≤ s < 2S+πR : 向こう正面 (-x 方向)
+  //   それ以降          : 3・4 コーナー
+  // 半円上の点は (中心 + r·cos p, r·sin p)、進行方向はその接線 (sin p, -cos p)。
   at(s, off) {
     const { S, R, mirror } = this;
     let x, z, dx, dz;
@@ -45,12 +75,15 @@ class Track {
     return { x: x * mirror, z, dx: dx * mirror, dz };
   }
   /** 外向きの法線 (スタンド側) */
+  // off を 0 → 1 に変えた 2 点の差 = コースの外側 (スタンド側) を向く単位ベクトル。
+  // カメラや建物をコースの外側に置くのに使う。
   outward(s) {
     const a = this.at(s, 0), b = this.at(s, 1);
     return new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize();
   }
 }
 
+// 空のグラデーション。縦長の小さなキャンバスに色を塗り、scene.background に貼る。
 function gradientTexture(stops) {
   const c = document.createElement("canvas");
   c.width = 4; c.height = 256;
@@ -63,6 +96,8 @@ function gradientTexture(stops) {
 }
 
 /** 芝の刈り目 / ダートの砂目 */
+// 芝の刈り目 (縞模様) とダートの砂粒を、画像ファイルを使わずキャンバスに描いて作る。
+// RepeatWrapping で走路全体に繰り返し貼る。anisotropy は斜めから見たときのぼやけを減らす設定。
 function surfaceTexture(dirt) {
   const c = document.createElement("canvas");
   c.width = c.height = 256;
@@ -85,8 +120,14 @@ function surfaceTexture(dirt) {
 }
 
 /** ローカル +x 軸を水平ベクトル v に向ける Y 回転角 */
+// 例: v = (0, 0, 1) (奥向き) → 回転角 -90°。ゴール線や発馬機を「コースを横切る向き」に置くのに使う。
 const alongX = v => Math.atan2(-v.z, v.x);
 
+// --- 3D シミュレーション本体。main.js から new RaceSim(canvas, コールバック) で使う ---
+// コールバック:
+//   onFrame(順位・残り距離・経過時間) … 毎フレーム。順位表 (HUD) の更新に使う
+//   onFinish(結果)                    … 全頭がゴールしたとき 1 回
+//   onLost()                          … GPU の都合で描画が続けられなくなったとき
 export class RaceSim {
   constructor(canvas, { onFrame, onFinish, onReady, onLost } = {}) {
     this.canvas = canvas;
@@ -102,6 +143,10 @@ export class RaceSim {
     this.camLook = new THREE.Vector3();
   }
 
+  // three.js の準備。WebGL が使えない環境では例外になり、main.js 側でメッセージを表示する。
+  //   - setPixelRatio を最大 2 に制限: 高解像度ディスプレイで描画が重くなりすぎないように
+  //   - PCFSoftShadowMap: 影の輪郭をやわらかくする
+  //   - ACESFilmic: 映画のような明暗の付け方 (明るい空が白飛びしにくい)
   async init() {
     const r = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: "high-performance" });
     r.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -117,6 +162,9 @@ export class RaceSim {
     this.controls.enableDamping = true;
     this.controls.maxPolarAngle = Math.PI * 0.48;
 
+    // 光は 2 つ: 空からの環境光 (Hemisphere: 上は空色、下は芝の色) + 太陽 (Directional、影を落とす)。
+    // 影を描く範囲 (shadow.camera) は ±70m に絞り、カメラが見ている場所に毎フレーム追従させる
+    // (コース全体 2km を影の範囲にすると、影の解像度が粗くなりすぎるため)。
     this.hemi = new THREE.HemisphereLight(0xdfeaf5, 0x4d5e35, 1.2);
     this.sun = new THREE.DirectionalLight(0xfff3df, 2.6);
     this.sun.castShadow = true;
@@ -125,6 +173,8 @@ export class RaceSim {
     this.sun.shadow.bias = -0.0004;
     this.scene.add(this.hemi, this.sun, this.sun.target);
 
+    // 馬の 3D モデル (Quaternius 作、CC0)。アニメーション Gallop (駆け足) と Idle (待機) を含む。
+    // モデルの大きさは作者によってまちまちなので、実寸 (体長 2.5m) になるよう縮尺を計算する。
     const gltf = await new GLTFLoader().loadAsync("/static/models/horse.glb");
     this.horseProto = gltf.scene;
     this.gallop = gltf.animations.find(a => a.name === "Gallop");
@@ -143,6 +193,7 @@ export class RaceSim {
     this.onReady?.();
   }
 
+  // 表示領域の大きさが変わったら (ウィンドウのサイズ変更、スマホの回転など) 描画サイズを合わせる。
   resize() {
     if (!this.renderer) return;
     const el = this.canvas.parentElement;
@@ -153,6 +204,7 @@ export class RaceSim {
     this.camera.updateProjectionMatrix();
   }
 
+  // 空・霧・光の色と明るさをテーマに合わせて切り替える。照明塔とスタンドの窓は夜だけ光らせる。
   /** ダークテーマはナイター (夜の照明) として描く */
   applyTheme() {
     if (!this.scene) return;
@@ -172,6 +224,8 @@ export class RaceSim {
     this.windowMat?.emissive.set(night ? 0x6d5a3a : 0x000000);
   }
 
+  // scores は Zig (race_once) が計算した各馬の「その日の出来」。大きいほど速い。
+  // 同じ opts で setup をやり直すと、まったく同じレースを再現できる (リプレイ)。
   /** コースと出走馬を作る。field: [{name, coat, waku, style, score}] */
   setup(opts) {
     const { course, distance, surface, field, scores } = opts;
@@ -192,10 +246,15 @@ export class RaceSim {
     this.buildWorld();
 
     // 着順の秒差: 出来 (score) の差を走破タイムに換算
+    // 平均速度 (m/秒) の目安: 芝 2000m を約 2 分で走る ≒ 16.6 m/s。ダートは少し遅く、ばんえいはとても遅い。
+    // 各馬の走破タイム T = 基準タイム × (1 + (1 着の出来 − その馬の出来) × 0.12)。
+    // 0.12 は「着差が現実的な範囲 (数馬身) に収まる」ように調整した係数。
     const vAvg = isBanei ? 1.7 : this.dirt ? 15.9 : 16.6;
     const base = this.distance / vAvg;
     const best = Math.max(...scores);
     field.forEach((f, i) => {
+      // 骨格アニメーション付きのモデルは普通の clone() では骨が共有されてしまうため、SkeletonUtils の clone を使う。
+      // マテリアルも 1 頭ずつ複製してから毛色を塗る (共有したままだと全頭が同じ色になる)。
       const root = cloneSkinned(this.horseProto);
       root.scale.setScalar(this.protoScale);
       const [body, dark, light, hair] = coatOf(f.coat);
@@ -209,10 +268,14 @@ export class RaceSim {
         else if (n === "Hair") o.material.color.set(hair);
         o.material.roughness = 0.55;
       });
+      // holder (入れ物) に「馬」と「騎手」を入れ、位置と向きは holder ごと動かす。
+      // モデルの前後が x 軸向きなら 90° 回して、holder の +z (進行方向) に合わせる。
       const holder = new THREE.Group();
       holder.add(root);
       if (this.protoAlongX) root.rotation.y = -Math.PI / 2;
       holder.add(this.makeJockey(f.silk));
+      // AnimationMixer: モデルのアニメーションを再生する仕組み。発走前は Idle、スタートで Gallop に切り替える。
+      // 再生位置を馬ごとにずらし (Math.random)、全頭の脚がそろって動く不自然さを避ける。
       const mixer = new THREE.AnimationMixer(root);
       const act = mixer.clipAction(this.gallop);
       act.time = Math.random() * this.gallop.duration;
@@ -223,6 +286,7 @@ export class RaceSim {
       this.horses.push({
         ...f, root: holder, mixer, act, idle, index: i,
         T, shape: STYLE_SHAPE[f.style] ?? 0,
+        // lane = 内ラチからの距離。発走時は馬番順に約 1.35m 間隔で横に並ぶ (発馬機のゲート幅)。
         lane: 1.2 + i * (Math.min(TRACK_W - 3, 1.35 * field.length) / field.length),
         s: this.startS, v: 0, finished: false, finishT: null, phase: Math.random() * 6,
       });
@@ -236,6 +300,7 @@ export class RaceSim {
     this.camPos.set(mid.x + out.x * 36 - mid.dx * 18, 9, mid.z + out.z * 36 - mid.dz * 18);
   }
 
+  // 騎手は胴 (カプセル)・頭 (球)・脚 (白いカプセル) の簡単な形。胴と帽子を枠の色 (勝負服) にする。
   makeJockey(color) {
     const g = new THREE.Group();
     const silk = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
@@ -254,6 +319,8 @@ export class RaceSim {
     return g;
   }
 
+  // コース周りの景色を作る: 芝生の地面 → 走路 → ラチ → ハロン棒・ゴール板 → スタンド → 照明塔・木 → 大型ビジョン → 発馬機。
+  // 同じ形をたくさん置くもの (ラチの支柱、木) は InstancedMesh で 1 回の描画命令にまとめて軽くしている。
   buildWorld() {
     const W = this.world, tr = this.track;
     const grass = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000), new THREE.MeshStandardMaterial({ color: this.night ? 0x2a3d22 : 0x5c7d43, roughness: 1 }));
@@ -264,6 +331,8 @@ export class RaceSim {
 
     // 走路
     const tex = surfaceTexture(this.dirt);
+    // 走路は 2m ごとに「内側の点」と「外側の点」を置き、隣どうしを三角形 2 枚でつないだ帯 (リボン) として作る。
+    // 法線はすべて真上 (0, 1, 0) にする (平らな地面なので計算不要。右回りで裏返っても暗くならない)。
     const pos = [], uv = [], idx = [];
     const total = tr.straightOnly ? tr.S + 40 : tr.L;
     const step = 2, n = Math.ceil(total / step);
@@ -302,6 +371,7 @@ export class RaceSim {
     // ハロン棒 (ゴールから 200m ごと) とゴール板
     const red = new THREE.MeshStandardMaterial({ color: 0xc8302a, roughness: 0.5 });
     const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+    // ハロン棒 = ゴールまでの残り距離を示す柱。200m ごとに立て、400m ごとに赤くする。
     for (let d = 200; d < Math.min(this.distance, 2000); d += 200) {
       const p = tr.at(tr.finish - d, -1.2);
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3, 8), d % 400 ? white : red);
@@ -322,6 +392,8 @@ export class RaceSim {
     W.add(line);
 
     // スタンド (ホームストレッチの外側)
+    // スタンドはホームストレッチの外側、外ラチから約 58m の位置。4 段の箱を少しずつ奥へずらして階段状にする。
+    // lookAt で「上の段ほどコースから遠い」向きにそろえる。
     const standLen = Math.min(tr.S * 0.8, 420);
     const mid = tr.at(tr.finish - standLen * 0.35, TRACK_W + 58);
     const stand = new THREE.Group();
@@ -377,6 +449,7 @@ export class RaceSim {
     }
 
     // 発馬機
+    // 発馬機: 18 枠分の仕切り・脚・屋根。スタート地点に、コースを横切る向きで置く。
     const gateMat = new THREE.MeshStandardMaterial({ color: 0x3d8a5d, roughness: 0.5, metalness: 0.2 });
     const gate = new THREE.Group();
     for (let k = 0; k <= 18; k++) {
@@ -399,6 +472,8 @@ export class RaceSim {
     W.add(gate);
   }
 
+  // すでに走り終えている (または途中) なら、同じ条件で最初から作り直してから走らせる。
+  // crossFadeTo: 待機アニメーションから駆け足へ 0.4 秒かけてなめらかに切り替える。
   start() {
     if (!this.horses.length || this.running) return;
     if (this.finished || this.t > 0) this.setup(this.lastSetup);
@@ -419,6 +494,14 @@ export class RaceSim {
   }
   setVisible(v) { this.visible = v; if (v) this.resize(); }
 
+  // スタートからの経過時刻 t → スタートからの走行距離 (m)。
+  //   1. tw = t − acc·(1 − e^(−t/acc))
+  //      … 発走直後は速度 0 から約 2 秒かけて加速する「時間の遅れ」を表す (acc = 1.1 秒)
+  //   2. u = tw / (T − acc)  … 0 (スタート) 〜 1 (ゴール) の進み具合。ちょうど時刻 T で 1 になる
+  //   3. 距離 = D × (u + shape·u·(1 − u))
+  //      … shape > 0 なら序盤に前へ (逃げ)、shape < 0 なら序盤は後ろで終盤に伸びる (追込)。
+  //         u = 0 と u = 1 では shape に関係なく 0 と D になるので、ゴール時刻は必ず T。
+  // ゴール後は 5 秒ほどかけて指数関数的に減速する。
   /** 時刻 t における位置 (m)。スタート直後は 0 から加速 */
   progress(h, t) {
     const acc = 1.1;
@@ -431,6 +514,11 @@ export class RaceSim {
     return this.distance + vEnd * 5 * (1 - Math.exp(-dt / 5));
   }
 
+  // 各馬の横位置 (レーン) を決めて、3D 空間に配置する。
+  // 前を走る馬から順に「すぐ前後 (体長の 1.15 倍以内) にいる馬と横に重ならないレーン」を探し、
+  // 重なるなら 1.3m ずつ外へずらす。実際の馬もなるべく内ラチ沿い (1.0m) を走ろうとする。
+  // レーンの変更は dt に比例して少しずつ (急に横へ瞬間移動しないように)。
+  // 向きは進行方向 (dx, dz) から atan2 で求める。
   placeHorses(dt) {
     const tr = this.track;
     // 前の馬から順に、重ならないレーンを選ぶ
@@ -455,6 +543,10 @@ export class RaceSim {
     return order;
   }
 
+  // 毎フレームの処理 (renderer.setAnimationLoop から呼ばれる)。
+  //   real = 実際に経過した秒数 (タブが裏に回っていた等で大きくなりすぎないよう最大 0.05 秒)
+  //   dt   = レース内の経過秒数 = real × 再生速度 (1×/2×/4×)
+  // シミュレーション画面が表示されていないときは何もしない (CPU / GPU を使わない)。
   frame() {
     if (!this.visible || !this.scene) return;
     const real = Math.min(this.clock.running ? this.clock.getDelta() : 0, 0.05);
@@ -468,8 +560,10 @@ export class RaceSim {
         h.s = this.startS + (h.started ? this.progress(h, this.t) : 0);
         const v = dt > 0 ? (h.s - prev) / dt : 0;
         h.v += (v - h.v) * 0.2;
+        // 脚の回転速度を実際の速度に合わせる (15 m/s で等速再生)。止まりそうでも 0.35 倍以下にはしない。
         h.act.timeScale = Math.max(0.35, h.v / 15);
         h.mixer.update(dt || 0);
+        // 騎手を速度に合わせて上下に揺らし、馬の上で弾んでいるように見せる。
         h.phase += dt * h.v * 0.45;
         const j = h.root.children[1];
         if (j) j.position.y = this.horseHeight * 0.72 + Math.sin(h.phase) * 0.05 * Math.min(1, h.v / 10);
@@ -499,6 +593,13 @@ export class RaceSim {
     });
   }
 
+  // カメラの位置を決める。先頭 6 頭の平均位置 (集団の中心) を基準にする。
+  //   broadcast (中継) : 外ラチの外・高さ 13m から集団を横に追う (テレビ中継の構図)
+  //   chase (追走)     : 先頭の馬の 14m 後ろ・高さ 4.5m から前方を見る
+  //   aerial (俯瞰)    : 上空からコース全体を見下ろす
+  //   free (自由)      : OrbitControls (ドラッグで回転) に任せ、注視点だけ集団に追従
+  // 目標位置へは lerp (少しずつ近づける) で動かし、カメラが急に飛ばないようにする。
+  // k = 1 − e^(−2.5·real) はフレームレートが変わっても同じ速さで追従するための係数。
   updateCamera(order, real) {
     if (!this.horses.length) return;
     const tr = this.track;
@@ -532,6 +633,7 @@ export class RaceSim {
     this.sun.target.position.copy(this.camLook);
   }
 
+  // 着順 (ゴール時刻の早い順) と着差。着差 = 前の馬とのゴール時刻の差 × 1 着馬の平均速度 (m) を馬身に換算。
   results() {
     const sorted = [...this.horses].sort((a, b) => a.finishT - b.finishT);
     const v = this.distance / sorted[0].finishT;

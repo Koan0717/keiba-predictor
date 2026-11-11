@@ -559,3 +559,4 @@ select { appearance: none; padding-right: 34px; cursor: pointer;
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
 }
+button.chip { border: 0; cursor: pointer; font-family: inherit; color: var(--ink); } button.chip:hover { background: var(--accent-soft); }

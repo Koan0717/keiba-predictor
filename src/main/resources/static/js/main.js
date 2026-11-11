@@ -1,5 +1,19 @@
-import { $, $$, esc, icon, api, toast, debounce, photo, wikiUrl, wakuOf, wakuBadge, wakuCss, gradeBadge, coatOf, horseSvg, fmtYen, seeded } from "./util.js";
+// ==================================================================================
+// main.js — 画面全体の動き (index.html から <script type="module"> で読み込まれる)
+// ==================================================================================
+// このファイルの構成:
+//   起動演出 (splash) → ルーティング (route) → テーマ → WebAssembly の読み込み
+//   → 各画面 (init.home / init.races / init.sim / ...) → アカウント → boot (起動処理)
+// 画面は 1 枚の HTML の中に全部入っていて、URL の # 以降 (#/horses など) で表示を切り替える
+// 「シングルページアプリ」。各画面は初めて開いたときに 1 回だけ init.画面名() で準備する。
+//
+// 【安全のための決まり】Wikipedia など外から来た文字列を HTML に入れるときは必ず esc() を通す。
+import { $, $$, esc, icon, api, toast, debounce, photo, wikiUrl, wakuOf, wakuBadge, wakuCss, gradeBadge, coatOf, horseSvg, fmtYen, seeded, setTokenProvider } from "./util.js";
 
+// Firebase の Web SDK (公式 CDN)。/api/config に設定がある環境 (Cloudflare Pages 版) だけで読み込む
+const FIREBASE_SDK = "https://www.gstatic.com/firebasejs/13.2.0/";
+
+// アプリ全体で共有する状態 (データの置き場)。画面をまたいで使う値はすべてここに入れる。
 const state = {
   courses: [],
   weather: new Map(),
@@ -14,12 +28,17 @@ const state = {
   sim: null,
   simReady: null,
 };
+// OS の「視差効果を減らす / アニメーションを減らす」設定。有効なら演出を最小限にする (アクセシビリティ)。
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const STYLE_NAMES = ["逃げ", "先行", "差し", "追込"];
 
 /* ============================================================
    起動: 発馬ゲートの演出
    ============================================================ */
+// 起動演出: 8 枠の発馬ゲートを並べ、読み込みが終わったら扉を開いて本編に切り替える。
+// 戻り値:
+//   track(説明, Promise) … 読み込み処理を登録。終わるたびに進捗バーを伸ばして説明を表示
+//   finish()             … すべて終わったら呼ぶ。最低 1.9 秒は見せてから開く (一瞬で消えないように)
 function splash() {
   const el = $("#splash"), bar = $("#splash-bar"), status = $("#splash-status");
   const gate = $("#gate");
@@ -27,6 +46,8 @@ function splash() {
     `<div class="stall" data-n="${i + 1}" style="--c:var(--w${i + 1});--t:var(--w${i + 1}t)"><div class="door l"></div><div class="door r"></div></div>`).join("");
   const started = performance.now();
   let total = 0, done = 0, closed = false;
+  // 扉を開く。左の枠から 45ms ずつ遅らせて、ゲートが順番に開くように見せる。
+  // アニメーションが終わったら splash の要素ごと消す (裏に残してクリックを邪魔しないように)。
   const close = () => {
     if (closed) return;
     closed = true;
@@ -56,6 +77,10 @@ function splash() {
 /* ============================================================
    ルーティング (#/view)
    ============================================================ */
+// URL の # → 表示する画面。例: #/horses → <section id="view-horses"> を表示し、ほかを隠す。
+// 知らない名前ならホームを表示する。
+// init[画面名] は「その画面を初めて開いたとき」だけ呼ぶ (2 回目以降は表示の切り替えだけ)。
+// 3D シミュレーションは表示中だけ描画させ、ほかの画面では止めて CPU / GPU を休ませる。
 const views = {};
 function route() {
   const name = (location.hash.match(/^#\/(\w+)/) || [])[1] || "home";
@@ -67,6 +92,8 @@ function route() {
   if (!views[target]?.loaded) { views[target] = { loaded: true }; init[target]?.(); }
   if (target !== "sim") window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "instant" });
 }
+// サイドメニューの「選択中」の背景 (ピル) を、選ばれた項目の位置と大きさに動かす。
+// CSS の transition でなめらかに移動する。
 function movePill() {
   const a = $("#nav a.on"), pill = $("#nav-pill");
   if (!a) return;
@@ -78,6 +105,11 @@ function movePill() {
 /* ============================================================
    テーマ
    ============================================================ */
+// テーマの切り替え。mode は "light" / "dark" / "auto" (OS に合わせる)。
+// 選んだ値は localStorage (このブラウザ内の保存領域) に覚える。
+// プライベートブラウズなどで保存できない環境もあるので try / catch で囲む。
+// document.startViewTransition: 対応ブラウザでは前後の画面をなめらかに切り替える。
+// 3D シミュレーションにも昼 / ナイターの切り替えを伝える。
 function setTheme(mode) {
   try { mode === "auto" ? localStorage.removeItem("kv-theme") : localStorage.setItem("kv-theme", mode); } catch (_) {}
   const next = mode === "auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : mode;
@@ -94,6 +126,9 @@ function syncThemeSeg() {
 /* ============================================================
    WebAssembly エンジン (C / Zig / Odin)
    ============================================================ */
+// 3 つの WebAssembly (C / Zig / Odin) を同時に読み込む。
+// Promise.allSettled: 1 つが失敗しても残りは使えるようにする (Promise.all だと 1 つの失敗で全部失敗になる)。
+// 読み込めなかったエンジンを使う機能だけが「読み込めませんでした」と表示される。
 async function loadEngines() {
   const load = async name => (await WebAssembly.instantiate(await (await fetch(`/static/wasm/${name}.wasm`)).arrayBuffer())).instance.exports;
   const [c, zig, odin] = await Promise.allSettled([load("keiba_physics"), load("montecarlo"), load("pedigree")]);
@@ -105,9 +140,11 @@ async function loadEngines() {
 /* ============================================================
    ホーム
    ============================================================ */
+// サーバーから届く馬場状態の英語名 → [日本語, 色分け用の CSS クラス]。
 const COND = { FIRM: ["良", "cond-good"], GOOD: ["稍重", "cond-wet"], YIELDING: ["重", "cond-wet"], SOFT: ["不良", "cond-bad"] };
 const init = {};
 
+// ホーム画面。大きな写真は「日付ごとに違う競馬場」を表示する (日付 % 写真のある競馬場の数)。
 init.home = async () => {
   const d = new Date();
   $("#hero-date").textContent = d.toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
@@ -132,6 +169,7 @@ init.home = async () => {
   } catch (e) { console.error(e); }
 };
 
+// 25 場の天気をまとめて取得し、競馬場 ID をキーにした Map に入れる (ホーム・競馬場画面で共用)。
 async function loadWeather() {
   try {
     const list = await api("/api/weather");
@@ -154,6 +192,8 @@ function renderWeatherGrid() {
 /* ============================================================
    写真のクレジット (作者とライセンスの表示)
    ============================================================ */
+// 写真の作者とライセンスを、写真の下に表示する (CC BY-SA などの利用条件)。
+// クレジットの取得に失敗しても、写真や画面の表示は止めない。
 async function credit(files, el, prefix = "") {
   if (!files.length || !el) return;
   try {
@@ -167,6 +207,9 @@ async function credit(files, el, prefix = "") {
 /* ============================================================
    競走馬名鑑
    ============================================================ */
+// 名鑑のカード 1 枚分の HTML。写真がない馬は毛色に合わせたシルエットを表示する。
+// 画像の読み込みに失敗したら (onerror) img を消して、灰色の背景だけにする。
+// loading="lazy": 画面に入りそうになるまで画像を読み込まない (たくさんの写真を一度に読まない)。
 function horseCard(v) {
   const h = v.horse;
   const [body, , , hair] = coatOf(h.color);
@@ -184,6 +227,8 @@ function bindHorseCards(root) {
   $$(".hcard", root).forEach(b => b.addEventListener("click", () => openHorse(b.dataset.title)));
 }
 
+// 名鑑画面。検索欄は入力が止まってから 250ms 後に検索する (debounce)。
+// 並び順や絞り込みを変えたら 1 ページ目から読み直す。
 init.horses = () => {
   const reload = debounce(() => loadHorses(true), 250);
   ["#horse-q"].forEach(s => $(s).addEventListener("input", reload));
@@ -192,6 +237,9 @@ init.horses = () => {
   loadHorses(true);
 };
 
+// 名鑑を 48 頭ずつ読み込む。reset = true なら最初から、false なら続き (「さらに表示」)。
+// loading フラグで、読み込み中にもう一度呼ばれても二重に読まないようにする。
+// 読み込み中は灰色の仮カード (skeleton) を表示する。
 async function loadHorses(reset) {
   const st = state.horses;
   if (st.loading) return;
@@ -216,6 +264,8 @@ async function loadHorses(reset) {
   } finally { st.loading = false; }
 }
 
+// 馬の詳細を右側のシートに表示する。まず「読み込み中」を出してから、データが届いたら中身を差し替える。
+// facts は [項目名, 値] の一覧で、値が空の項目は表示しない。
 async function openHorse(title) {
   openSheet(`<div class="detail-photo"></div><div class="detail-body"><p class="muted">読み込み中</p></div>`);
   try {
@@ -255,6 +305,9 @@ async function openHorse(title) {
   }
 }
 
+// 右から出てくる詳細シート。hidden を外してから次のフレームで .on を付けると、
+// CSS のスライドインのアニメーションが確実に再生される。
+// キーボード操作の人のために、閉じるボタンにフォーカスを移す。
 function openSheet(html) {
   $("#sheet-body").innerHTML = html;
   const s = $("#sheet");
@@ -292,6 +345,10 @@ function renderCourses(cat) {
   $$("#course-grid .ccard").forEach(b => b.addEventListener("click", () => openCourse(b.dataset.id)));
 }
 
+// 競馬場の簡単なコース図 (SVG)。楕円の大きさは直線の長さに比例させる。
+// 左回りなら右から左へ、右回りなら左から右へホームストレッチを描き、端にゴール線を引く。
+// 高低差データがある競馬場 (東京・中山・京都・阪神) は下に高低差のグラフも描く。
+// ばんえい (帯広) は直線コースなので別の図にする。
 function courseSvg(c) {
   const W = 320, cx = W / 2, cy = 70;
   if (c.turn === "直線") {
@@ -319,6 +376,8 @@ function courseSvg(c) {
   </svg>`;
 }
 
+// 競馬場の詳細シート: 写真・コース図・天気・特徴、その競馬場で行われる競走の一覧。
+// 「このコースで走らせる」は 3D シミュレーションに競馬場を設定して移動する。
 async function openCourse(id) {
   const c = state.courses.find(x => x.id === id);
   if (!c) return;
@@ -359,6 +418,7 @@ async function openCourse(id) {
 /* ============================================================
    競走一覧
    ============================================================ */
+// 競走一覧画面。条件を変えるたびに 1 ページ目 (100 件) から読み直す。
 init.catalog = () => {
   $("#catalog-course").insertAdjacentHTML("beforeend", state.courses.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join(""));
   $("#catalog-q").addEventListener("input", debounce(() => loadCatalog(true)));
@@ -389,6 +449,8 @@ async function loadCatalog(reset) {
     location.hash = "#/sim";
   }));
 }
+// その競走の条件 (競馬場・距離・馬場) で 3D シミュレーションを準備するボタン。
+// 競馬場が現役 25 場に含まれない (廃止された競馬場など) 競走にはボタンを出さない。
 function simButtonFor(r) {
   const c = state.courses.find(x => r.course.startsWith(x.name));
   if (!c) return "";
@@ -398,6 +460,7 @@ function simButtonFor(r) {
 /* ============================================================
    レース予想 (サンプルの出馬表)
    ============================================================ */
+// レース予想画面 (サンプル出馬表)。上のタブでレースを切り替える。
 init.races = async () => {
   const races = await api("/api/races");
   $("#race-tabs").innerHTML = races.map((r, i) => `<button type="button" data-id="${r.id}" class="${i ? "" : "on"}">${esc(r.name.replace(/\s*\(.*\)/, ""))}</button>`).join("");
@@ -420,6 +483,8 @@ init.races = async () => {
   if (races[0]) loadRace(races[0].id);
 };
 
+// 脚質の英語名 → Zig に渡す番号 (0 逃げ / 1 先行 / 2 差し / 3 追込)。
+// TRAINING は調教評価 → スタミナ (0〜1) への換算表。
 const STYLE_CODE = { NIGE: 0, SENKO: 1, SASHI: 2, OIKOMI: 3 };
 const TRAINING = { "S": 1.0, "A+": 0.9, "A": 0.8, "B": 0.65, "C": 0.5 };
 
@@ -437,6 +502,9 @@ async function loadRace(id) {
   renderEntries();
 }
 
+// Zig の WebAssembly で同じレースを 100,000 回走らせて、勝率と 3 着以内率を棒グラフにする。
+// seed (20261109) を固定しているので、同じ条件なら毎回同じ結果になる。
+// 棒の長さは「3 着以内率の最大値」を 100% としてそろえる。
 function renderMonteCarlo() {
   const z = state.engines.zig, a = state.race;
   if (!a) return;
@@ -454,6 +522,8 @@ function renderMonteCarlo() {
   $("#mc-meta").textContent = `100,000 回の計算に ${ms.toFixed(0)} ms (Zig → WebAssembly)`;
 }
 
+// 出馬表。「妙味」は C の WebAssembly (calculate_ev_index) で、勝率とオッズから期待値の目安を計算する。
+// 読み込めていなければサーバーが計算した値を使う。
 function renderEntries() {
   const a = state.race;
   if (!a) return;
@@ -487,6 +557,9 @@ function renderEntries() {
 
 const COURSE_BY_SHORT = s => state.courses.find(c => c.short === s);
 
+// レース予想の出走馬を、そのまま 3D シミュレーションの出走表にする。
+// 名鑑に同じ名前の馬がいれば毛色を使う (いなければ鹿毛)。
+// スピードはサンプル出馬表のスピード指数をそのまま使う (effectiveSpeed の f.speed)。
 async function raceToSim() {
   const r = state.race?.race;
   if (!r) return;
@@ -507,6 +580,9 @@ const a2pace = s => (s === "ハイペース" ? "1.2" : s === "スローペース
 /* ============================================================
    3D シミュレーション
    ============================================================ */
+// 名鑑の馬には脚質のデータがないので、仮の脚質を決める (画面で変更できる)。
+// 得意距離が短い馬は先行、長い馬は差し。分からない馬は名前から計算した数で振り分ける
+// (毎回同じ馬が同じ脚質になるように、乱数ではなく名前のハッシュ値を使う)。
 function defaultStyle(v) {
   const d = v.bestDistance;
   if (d && d < 1500) return 1;
@@ -516,6 +592,7 @@ function defaultStyle(v) {
   const x = Math.abs(hsh) % 100;
   return x < 12 ? 0 : x < 52 ? 1 : x < 85 ? 2 : 3;
 }
+// 名鑑の馬を出走表に追加する。最大 18 頭 (フルゲート)、同じ馬は 2 回入れない。
 function addToField(v) {
   if (state.field.length >= 18) { toast("出走できるのは18頭までです"); return; }
   if (state.field.some(f => f.title === v.horse.title)) { toast(`${v.horse.name} はすでに出走表にいます`); return; }
@@ -527,6 +604,8 @@ function addToField(v) {
   toast(`${v.horse.name} を追加しました`);
 }
 
+// シミュレーション画面の出走表。脚質を変えたり馬を外したりしたら、すぐにレースを組み直す。
+// 2 頭以上いないとスタートできない。
 function renderField() {
   const n = state.field.length;
   $("#sim-count").textContent = `${n} / 18`;
@@ -539,6 +618,9 @@ function renderField() {
   $("#sim-start").disabled = n < 2;
 }
 
+// シミュレーションの条件を外から設定する (競走一覧・競馬場・レース予想から呼ばれる)。
+// シミュレーション画面がまだ一度も開かれていない (選択肢が作られていない) ときは、
+// いったん state.preset に預けて、init.sim の中で適用する。
 function presetSim(preset = {}) {
   if (!$("#sim-course").options.length) { state.preset = preset; return; } // シミュレーション画面の初期化後に適用
   const { course, distance, surface, pace } = preset;
@@ -550,6 +632,8 @@ function presetSim(preset = {}) {
   prepareSim();
 }
 
+// 能力値 45〜99 → スピード 92〜120 (レース予想のスピード指数とだいたい同じ範囲) に換算し、
+// 得意でない馬場なら -4、得意距離から 250m 離れるごとに -1 (最大 -6) する。
 /** 能力値と、距離・馬場の向き不向きから Zig に渡す「スピード」を作る */
 function effectiveSpeed(f, distance, surface) {
   if (f.speed) return f.speed;
@@ -559,6 +643,11 @@ function effectiveSpeed(f, distance, surface) {
   return s;
 }
 
+// 条件や出走馬が変わるたびにレースを組み直す。
+//   1. Zig の race_once で各馬の「その日の出来」を計算 (毎回違う seed なので毎回違う展開)
+//   2. 枠番・勝負服の色を決めて、3D シーンを作り直す (sim.setup)
+// prepareToken: 3D の準備を待っている間に次の変更が来たら、古いほうの処理は途中で捨てる。
+// Zig が読み込めなかったときは、JS の乱数で代わりの「出来」を作る。
 let prepareToken = 0;
 async function prepareSim() {
   if (!state.sim) return;
@@ -586,12 +675,15 @@ async function prepareSim() {
     return { name: f.name, coat: f.coat, style: f.style, num: i + 1, waku, silk: wakuCss(waku) || "#ffffff" };
   });
   state.sim.setup({ course, distance, surface, field, scores });
+  state.lastSim = { courseId: course.id, course: course.short, distance: course.category === "ばんえい" ? 200 : distance, surface: course.category === "ばんえい" ? "ばんえい" : surface };
   $("#sim-result").hidden = true;
   $("#sim-hud").hidden = false;
   $("#hud-course").textContent = `${course.short} ${course.category === "ばんえい" ? "ばんえい 200m" : `${surface}${distance}m`}`;
   updateHud({ order: field.map((_, i) => i), remain: course.category === "ばんえい" ? 200 : distance, t: 0 });
 }
 
+// 左上の順位表 (HUD)。毎フレーム HTML を作り直すと重いので、0.12 秒に 1 回だけ更新する
+// (force = true のときは必ず更新。ゴールした瞬間など)。
 let hudAt = 0;
 function updateHud({ order, remain, t }, force) {
   const now = performance.now();
@@ -603,6 +695,8 @@ function updateHud({ order, remain, t }, force) {
   $("#hud-order").innerHTML = order.slice(0, 18).map((i, k) => `<li><span class="pos">${k + 1}</span>${wakuBadge(i + 1, wakuOf(i + 1, n))}<span class="nm">${esc(state.field[i]?.name || "")}</span></li>`).join("");
 }
 
+// 結果パネル。1 着は走破タイム、2 着以下は前の馬との着差を表示する。
+// 「もう一度」は新しい展開で、「リプレイ」は同じ展開でもう一度走らせる。
 function showResult(results) {
   $("#sim-result").innerHTML = `<h3>結果</h3><ol class="result-list">${results.map((r, k) => `<li><span class="pos">${k + 1}</span>${wakuBadge(r.num, r.waku)}<span>${esc(r.name)}</span><span class="gap">${k === 0 ? `${Math.floor(r.time / 60)}:${(r.time % 60).toFixed(1).padStart(4, "0")}` : esc(r.margin)}</span></li>`).join("")}</ol>
     <div class="btn-row"><button class="btn primary small" id="sim-again" type="button">${icon("refresh-cw")}もう一度 (別の展開)</button><button class="btn ghost small" id="sim-replay" type="button">${icon("rotate-ccw")}リプレイ</button></div>`;
@@ -611,6 +705,9 @@ function showResult(results) {
   $("#sim-replay").onclick = () => { $("#sim-result").hidden = true; state.sim.start(); };
 }
 
+// 3D シミュレーション画面の準備。
+// three.js は大きい (約 700KB) ので、この画面を初めて開いたときにだけ読み込む (import())。
+// 出走馬がいなければ「名馬でおまかせ」で 14 頭を自動で選ぶ。
 init.sim = async () => {
   $("#sim-course").innerHTML = ["中央", "地方", "ばんえい"].map(cat => `<optgroup label="${cat}">${state.courses.filter(c => c.category === cat).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</optgroup>`).join("");
   $("#sim-course").value = "tokyo";
@@ -637,7 +734,7 @@ init.sim = async () => {
   const { RaceSim } = await import("./sim3d.js");
   state.sim = new RaceSim($("#sim-canvas"), {
     onFrame: f => updateHud(f),
-    onFinish: r => { updateHud({ order: r.map(x => x.index), remain: 0, t: r[r.length - 1].time }, true); showResult(r); },
+    onFinish: r => { updateHud({ order: r.map(x => x.index), remain: 0, t: r[r.length - 1].time }, true); showResult(r); saveSim(r); },
     onLost: () => { $("#sim-loading").textContent = "3D 描画が中断されました。ページを再読み込みしてください"; $("#sim-loading").classList.remove("done"); },
   });
   state.sim.setVisible(true);
@@ -649,6 +746,7 @@ init.sim = async () => {
   else prepareSim();
 };
 
+// 能力値上位 80 頭 (選んだ馬場が得意な馬) からランダムに 14 頭を選ぶ。
 async function autoField() {
   const surface = $("#sim-surface").value;
   const page = await api(`/api/horses?sort=rating&surface=${encodeURIComponent(surface)}&limit=80`);
@@ -663,6 +761,8 @@ async function autoField() {
   prepareSim();
 }
 
+// 「名鑑から馬を追加」の入力補完。↑↓ で候補を選び、Enter で追加、Esc で閉じる。
+// クリックは mousedown で拾う (click だと、入力欄の blur で候補が先に消えてしまうため)。
 function setupSuggest() {
   const input = $("#sim-search"), list = $("#sim-suggest");
   let items = [], active = -1;
@@ -691,6 +791,10 @@ function setupSuggest() {
 /* ============================================================
    中継
    ============================================================ */
+// 中継画面。YouTube の埋め込みプレーヤーで、各競馬場の公式チャンネルを表示する。
+//   live   … https://www.youtube.com/embed/live_stream?channel=ID  (配信中のライブ)
+//   latest … https://www.youtube.com/embed/videoseries?list=UU...   (チャンネルの最新の動画一覧)
+// 「UU + チャンネルIDの3文字目以降」は、そのチャンネルのアップロード動画一覧を表す YouTube の決まり。
 let liveCourse = null, liveMode = "latest"; // ライブは配信中しか映らないので、既定は最新の映像
 init.live = () => {
   $("#live-grid").innerHTML = state.courses.map(c => `<button class="live-item" type="button" data-id="${c.id}">
@@ -727,6 +831,7 @@ function playLive(id) {
 /* ============================================================
    血統 / 品種と毛色 / 払戻計算 / 設定
    ============================================================ */
+// 血統画面: Odin の血量計算機と、父系の系統図・解説カード。
 init.pedigree = async () => {
   ["#odin-g1", "#odin-g2"].forEach(s => $(s).addEventListener("input", renderOdin));
   renderOdin();
@@ -737,6 +842,7 @@ init.pedigree = async () => {
     <dl><dt>芝</dt><dd>${esc(p.turfAptitude)}</dd><dt>ダート</dt><dd>${esc(p.dirtAptitude)}</dd><dt>得意距離</dt><dd>${esc(p.distanceRange)}</dd></dl>
     <p>${esc(p.characteristics)}</p><div class="chips">${p.keyStallions.map(s => `<span class="chip">${esc(s)}</span>`).join("")}</div></section>`).join("");
 };
+// 入力が 1〜12 の整数かを確かめてから、Odin の WebAssembly で血量・近交係数・評価を計算する。
 function renderOdin() {
   const g1 = parseInt($("#odin-g1").value, 10), g2 = parseInt($("#odin-g2").value, 10), o = state.engines.odin;
   const out = $("#odin-out");
@@ -749,6 +855,8 @@ function renderOdin() {
     <span class="tag r${r}">${["弱いクロス", "ほどよいクロス", "濃いクロス"][r]}</span>`;
 }
 
+// 品種と毛色の画面。体高くらべのグラフは、いちばん高いものを 160px として高さをそろえる。
+// 体高は "160〜170cm" のような文字列なので、中の数字の平均をとる (parseCm)。
 init.knowledge = async () => {
   const [breeds, coats] = await Promise.all([api("/api/encyclopedia/breeds"), api("/api/encyclopedia/coats")]);
   const parseCm = s => { const n = (s.match(/\d+/g) || []).map(Number); return n.length ? n.reduce((a, b) => a + b) / n.length : 0; };
@@ -763,6 +871,7 @@ init.knowledge = async () => {
     <h3>${esc(c.name)}<small>${esc(c.reading)}</small></h3><p>${esc(c.description)}</p><p class="spec">代表馬 ${esc(c.famousHorse)}</p></article>`).join("");
 };
 
+// 払戻計算: 払戻金 = オッズ × 購入金額 (10 円単位に丸める)。回収率 = 払戻金 ÷ 購入金額。
 init.tools = () => {
   const calc = () => {
     const odds = Math.max(1, parseFloat($("#pay-odds").value) || 1), amount = Math.max(100, parseInt($("#pay-amount").value, 10) || 100);
@@ -774,6 +883,8 @@ init.tools = () => {
   calc();
 };
 
+// 設定画面: テーマ、データの状態と更新、計算エンジンの状態。
+// データ更新中は 2 秒ごとにサーバーへ進み具合を問い合わせて表示する。
 init.settings = () => {
   syncThemeSeg();
   $$("#theme-seg button").forEach(b => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
@@ -785,32 +896,102 @@ init.settings = () => {
   const poll = async () => { const st = await api("/api/library/status"); show(st); if (st.syncing) setTimeout(poll, 2000); };
   $("#data-refresh").addEventListener("click", async () => { show(await api("/api/library/refresh", { method: "POST" })); setTimeout(poll, 1500); });
   poll();
+  renderMyData();
 };
+
+/** マイデータ (お気に入りとシミュレーション履歴)。D1 に保存できる環境でサインインしているときだけ表示 */
+async function renderMyData() {
+  const box = $("#mydata");
+  box.hidden = !(state.authMode === "firebase" && state.user);
+  if (box.hidden) return;
+  const favs = state.user.favoriteHorses || [];
+  $("#my-favs").innerHTML = favs.length
+    ? favs.map(f => `<button class="chip" type="button" data-title="${esc(f)}">${esc(f)}</button>`).join("")
+    : `<p class="muted">名鑑やレース予想の ☆ で登録できます</p>`;
+  $$("#my-favs [data-title]").forEach(b => b.addEventListener("click", () => openHorse(b.dataset.title)));
+  try {
+    const sims = await api("/api/sims");
+    $("#my-sims").innerHTML = sims.length
+      ? `<ul class="wins-list">${sims.map(s => `<li><span class="muted num">${esc(new Date(s.created_at.replace(" ", "T") + "Z").toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }))}</span>
+          <span>${esc(s.course)} ${esc(s.surface)}${s.distance}m</span><span>1着 <strong>${esc(s.result[0]?.name)}</strong></span></li>`).join("")}</ul>`
+      : `<p class="muted">3D シミュレーションを走らせると、結果がここに残ります</p>`;
+  } catch (_) { $("#my-sims").innerHTML = `<p class="muted">読み込めませんでした</p>`; }
+}
+
+/** 3D シミュレーションの結果を D1 に保存 (サインイン中だけ。失敗しても画面は止めない) */
+function saveSim(results) {
+  if (state.authMode !== "firebase" || !state.user || !state.lastSim) return;
+  api("/api/sims", { method: "POST", body: JSON.stringify({ ...state.lastSim, result: results.map(r => ({ name: r.name, num: r.num, waku: r.waku, time: r.time, margin: r.margin })) }) })
+    .then(() => toast("結果を履歴に保存しました"))
+    .catch(() => {});
+}
 
 /* ============================================================
    アカウント・お気に入り・メモ (デモ)
    ============================================================ */
+// サイドメニュー下のアカウント表示 (デモのサインイン)。
 function renderAccount() {
   const u = state.user;
+  $("#account").hidden = state.authMode === "none"; // サインインできない環境ではボタン自体を出さない
   $("#account").innerHTML = u
     ? `<button type="button" id="logout" title="サインアウト"><img src="${esc(u.avatarUrl)}" alt=""><span>${esc(u.name)}</span></button>`
     : `<button type="button" id="login">${icon("log-in")}<span>サインイン</span></button>`;
   $("#login")?.addEventListener("click", () => $("#login-dialog").showModal());
-  $("#logout")?.addEventListener("click", async () => { await fetch("/api/auth/logout", { method: "POST" }); state.user = null; renderAccount(); renderEntries(); toast("サインアウトしました"); });
+  $("#logout")?.addEventListener("click", async () => {
+    if (state.authMode === "firebase") await state.fb.A.signOut(state.fb.auth); // onAuthStateChanged が表示を更新する
+    else { await api("/api/auth/logout", { method: "POST" }).catch(() => {}); setUser(null); }
+    toast("サインアウトしました");
+  });
 }
-async function toggleFavorite(name) {
-  if (!state.user) { $("#login-dialog").showModal(); return; }
-  const res = await fetch("/api/favorites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ horseName: name }) });
-  if (!res.ok) return;
-  state.user = await res.json();
+
+/** ユーザーが変わったら、それに関係する表示をまとめて更新 */
+function setUser(u) {
+  state.user = u;
+  renderAccount();
   renderEntries();
+  if (views.settings?.loaded) renderMyData();
+}
+
+/**
+ * サインインの方式を決める。
+ *   firebase … /api/config に Firebase の設定がある (Cloudflare Pages 版)。Google でサインインし、データは D1 に保存
+ *   demo     … Kotlin のアプリ版。サーバーのメモリに保存するデモ用サインイン
+ *   none     … どちらも使えない (Pages 版で Firebase が未設定)
+ */
+async function initAuth() {
+  let cfg;
+  try { cfg = (await api("/api/config")).firebase; } catch (_) { cfg = undefined; } // Kotlin 版には /api/config がない
+  if (cfg === null) { state.authMode = "none"; return; }
+  if (!cfg) {
+    state.authMode = "demo";
+    state.user = await api("/api/auth/me").catch(() => null);
+    return;
+  }
+  state.authMode = "firebase";
+  const [{ initializeApp }, A] = await Promise.all([import(FIREBASE_SDK + "firebase-app.js"), import(FIREBASE_SDK + "firebase-auth.js")]);
+  const auth = A.getAuth(initializeApp(cfg));
+  state.fb = { auth, A };
+  // API を呼ぶたびに最新の ID トークンを付ける (期限が近ければ SDK が自動で更新する)
+  setTokenProvider(() => auth.currentUser?.getIdToken() ?? null);
+  $("#login-title").textContent = "Google でサインイン";
+  $("#login-desc").textContent = "お気に入り・予想メモ・シミュレーション履歴をクラウド (Cloudflare D1) に保存し、どの端末からでも見られます。";
+  $("#login-go").lastChild.textContent = "Google でサインイン";
+  await new Promise(resolve => A.onAuthStateChanged(auth, async u => {
+    setUser(u ? await api("/api/auth/me").catch(() => null) : null);
+    resolve();
+  }));
+}
+// お気に入りの追加 / 解除。サインインしていなければサインイン画面を出す。
+async function toggleFavorite(name) {
+  if (!state.user) { if (state.authMode !== "none") $("#login-dialog").showModal(); else toast("この環境ではお気に入りを保存できません"); return; }
+  try { setUser(await api("/api/favorites", { method: "POST", body: JSON.stringify({ horseName: name }) })); } catch (_) { toast("保存できませんでした"); return; }
   const on = state.user.favoriteHorses.includes(name);
   const btn = $("#fav-btn");
   if (btn) { btn.classList.toggle("on", on); btn.innerHTML = `${icon("star")}${on ? "お気に入り済み" : "お気に入り"}`; }
   toast(on ? "お気に入りに追加しました" : "お気に入りから外しました");
 }
 function openNote() {
-  if (!state.user) { $("#login-dialog").showModal(); return; }
+  if (!state.user) { if (state.authMode !== "none") $("#login-dialog").showModal(); else toast("この環境ではメモを保存できません"); return; }
   const id = $("#race-tabs button.on")?.dataset.id;
   $("#note-race").textContent = state.race?.race.name || "";
   $("#note-text").value = state.user.notes?.[id] || "";
@@ -821,13 +1002,16 @@ function openNote() {
 /* ============================================================
    起動
    ============================================================ */
+// 起動処理。競馬場・計算エンジン・天気・アカウントを同時に読み込み (それぞれ起動演出の進捗に登録)、
+// 全部終わってからイベントを登録して最初の画面を表示する。
+// 1 つが失敗しても (天気が取れない等) アプリは起動する (Promise.allSettled)。
 async function boot() {
   const sp = splash();
   const tasks = [
     sp.track("競馬場を読み込みました", api("/api/courses").then(c => (state.courses = c))),
     sp.track("計算エンジンを準備しました", loadEngines()),
     sp.track("天気を取得しました", loadWeather()),
-    sp.track("アカウントを確認しました", fetch("/api/auth/me").then(r => (r.ok ? r.json() : null)).then(u => (state.user = u)).catch(() => null)),
+    sp.track("アカウントを確認しました", initAuth().catch(e => { console.warn("サインインの準備に失敗", e); state.authMode = "none"; })),
   ];
   await Promise.allSettled(tasks);
   renderAccount();
@@ -842,14 +1026,25 @@ async function boot() {
   addEventListener("keydown", e => { if (e.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
   $("#login-dialog").addEventListener("close", async () => {
     if ($("#login-dialog").returnValue !== "demo") return;
-    const res = await fetch("/api/auth/login?provider=demo", { method: "POST" });
-    if (res.ok) { state.user = await res.json(); renderAccount(); renderEntries(); toast("サインインしました"); }
+    try {
+      if (state.authMode === "firebase") {
+        // ボタンを押した直後に呼ぶ (ポップアップのブロックを避けるため)。結果は onAuthStateChanged に届く
+        await state.fb.A.signInWithPopup(state.fb.auth, new state.fb.A.GoogleAuthProvider());
+      } else {
+        setUser(await api("/api/auth/login?provider=demo", { method: "POST" }));
+      }
+      toast("サインインしました");
+    } catch (e) {
+      if (e?.code !== "auth/popup-closed-by-user" && e?.code !== "auth/cancelled-popup-request") toast("サインインできませんでした");
+    }
   });
   $("#note-dialog").addEventListener("close", async () => {
     const d = $("#note-dialog");
     if (d.returnValue !== "save") return;
-    const res = await fetch("/api/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raceId: d.dataset.race, note: $("#note-text").value }) });
-    if (res.ok) { state.user = await res.json(); toast("メモを保存しました"); }
+    try {
+      setUser(await api("/api/notes", { method: "POST", body: JSON.stringify({ raceId: d.dataset.race, note: $("#note-text").value }) }));
+      toast("メモを保存しました");
+    } catch (_) { toast("メモを保存できませんでした"); }
   });
   addEventListener("hashchange", route);
   addEventListener("resize", movePill);

@@ -283,6 +283,13 @@
             <button class="btn ghost small" id="data-refresh" type="button"><svg><use href="/static/icons/sprite.svg#i-refresh-cw"/></svg>今すぐ更新</button></div>
           <div class="row"><div><strong>計算エンジン</strong><p class="muted" id="engine-status">—</p></div></div>
         </section>
+        <section class="card" id="mydata" hidden>
+          <header class="card-head"><h3>マイデータ</h3><span class="muted">Cloudflare D1 に保存</span></header>
+          <p class="note">お気に入りの馬</p>
+          <div class="chips" id="my-favs"></div>
+          <p class="note" style="margin-top:18px">3D シミュレーションの履歴 (新しい順・最大 30 件表示)</p>
+          <div id="my-sims"></div>
+        </section>
         <section class="card prose">
           <h3>データとライセンス</h3>
           <ul>
@@ -310,9 +317,9 @@
 
   <dialog class="dialog" id="login-dialog">
     <form method="dialog">
-      <h3>サインイン</h3>
-      <p class="muted">お気に入りと予想メモを保存できます。デモ用のため、アプリを終了すると消えます。</p>
-      <button class="btn primary wide" value="demo" type="submit"><svg><use href="/static/icons/sprite.svg#i-log-in"/></svg>デモアカウントで続ける</button>
+      <h3 id="login-title">サインイン</h3>
+      <p class="muted" id="login-desc">お気に入りと予想メモを保存できます。デモ用のため、アプリを終了すると消えます。</p>
+      <button class="btn primary wide" id="login-go" value="demo" type="submit"><svg><use href="/static/icons/sprite.svg#i-log-in"/></svg>デモアカウントで続ける</button>
       <button class="btn ghost wide" value="cancel" type="submit">キャンセル</button>
     </form>
   </dialog>

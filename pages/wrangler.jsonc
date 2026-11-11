@@ -1,0 +1,27 @@
+// Cloudflare Pages の設定。`npm run deploy` で dist/ と functions/ を Pages に公開する
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "keiba-vision",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-11-10",
+  // D1 (SQLite): ユーザーごとのお気に入り・予想メモ・シミュレーション履歴
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "keiba-vision-db",
+      "database_id": "cb7e87b9-392c-4f2a-879c-e922525824a1",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // R2: 名鑑・競走などのデータ (data/*.json)。再デプロイなしで `npm run data:upload` だけで更新できる
+  "r2_buckets": [
+    { "binding": "DATA", "bucket_name": "keiba-vision-data" }
+  ],
+  // Firebase の Web 用設定 (公開して問題ない値。秘密情報ではない)。空ならサインイン機能を隠す
+  "vars": {
+    "FIREBASE_API_KEY": "",
+    "FIREBASE_AUTH_DOMAIN": "",
+    "FIREBASE_PROJECT_ID": "",
+    "FIREBASE_APP_ID": ""
+  }
+}

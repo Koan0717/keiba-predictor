@@ -3,6 +3,7 @@ package com.example.keiba.data
 import com.example.keiba.model.Horse
 import com.example.keiba.model.RunningStyle
 
+// 旧版の名残で、現在どこからも使われていない (horses.csv を読む初期の実装)。
 class DataLoader {
     fun loadHorsesFromCsv(): List<Horse> {
         val stream = javaClass.getResourceAsStream("/horses.csv") ?: return emptyList()
