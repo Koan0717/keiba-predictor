@@ -5,7 +5,9 @@ import com.example.keiba.service.RaceService
 import com.example.keiba.service.HorseView
 import com.example.keiba.service.LibraryService
 import com.example.keiba.service.WeatherService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -24,6 +26,9 @@ import kotlinx.serialization.encodeToString
 import org.slf4j.LoggerFactory
 import java.awt.Desktop
 import java.net.URI
+
+private const val LIVE_ORIGIN = "https://keiba-vision.pages.dev"
+private val liveHttp = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build()
 
 @Serializable
 // ==================================================================================
@@ -197,6 +202,22 @@ fun main(args: Array<String>) {
                 call.respond(listOf("keiba_physics", "montecarlo", "pedigree").associateWith { name ->
                     javaClass.getResource("/static/wasm/$name.wasm")?.openStream()?.use { it.readBytes().size } ?: 0
                 })
+            }
+
+            // JRA の実際の開催日程・出馬表・オッズ。取得は Cloudflare 版 (keiba-vision-sync Worker が 1 分ごとに自動取得) が行い、
+            // ローカル版はそれを中継するだけ (JRA へ直接アクセスする所を 1 か所にまとめて、負荷を増やさないため)。
+            get("/api/live/{name}") {
+                val name = call.parameters["name"]
+                if (name !in setOf("schedule", "races", "race", "status")) return@get call.respond(HttpStatusCode.NotFound)
+                val qs = call.request.queryString().let { if (it.isEmpty()) "" else "?$it" }
+                try {
+                    val req = java.net.http.HttpRequest.newBuilder(URI("$LIVE_ORIGIN/api/live/$name$qs"))
+                        .timeout(java.time.Duration.ofSeconds(15)).GET().build()
+                    val res = withContext(Dispatchers.IO) { liveHttp.send(req, java.net.http.HttpResponse.BodyHandlers.ofString()) }
+                    call.respondText(res.body(), ContentType.Application.Json, HttpStatusCode.fromValue(res.statusCode()))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadGateway, mapOf("error" to "最新データを取得できませんでした"))
+                }
             }
 
             // 競馬データ API

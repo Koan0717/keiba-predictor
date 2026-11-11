@@ -13,6 +13,7 @@
 //   DB   (D1) … users / favorites / notes / sim_results テーブル (migrations/0001_init.sql)
 
 import { verifyIdToken, type FirebaseUser } from "../../lib/firebase-auth.ts";
+import { parseScheduleMonth } from "../../lib/jra.ts";
 
 // Cloudflare の型定義パッケージを入れずに済むよう、使う部分だけを書いた最小限の型
 interface D1Stmt { bind(...v: unknown[]): D1Stmt; all<T = any>(): Promise<{ results: T[] }>; first<T = any>(): Promise<T | null>; run(): Promise<{ meta: { changes: number } }> }
@@ -247,6 +248,58 @@ async function userApi(path: string, request: Request, env: Env): Promise<Respon
   return json({ error: "Method Not Allowed" }, 405);
 }
 
+// --- JRA の実データ (keiba-vision-sync Worker が D1 に入れたもの) -----------------------
+const VENUE_NAMES: Record<string, string> = { "01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京", "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉" };
+const jstToday = (offsetDays = 0) => new Date(Date.now() + 9 * 3600_000 + offsetDays * 86400_000).toISOString().slice(0, 10);
+
+async function liveApi(path: string, q: URLSearchParams, env: Env): Promise<Response | null> {
+  if (!path.startsWith("live/")) return null;
+  if (!env.DB) return json({ error: "この環境では使えません" }, 501);
+  const db = env.DB;
+
+  if (path === "live/schedule") {
+    // 今日から 10 週間先までの開催日と重賞
+    const rows = await db.prepare("SELECT month, json FROM jra_schedule ORDER BY month").all<{ month: string; json: string }>();
+    const from = jstToday(), to = jstToday(70);
+    // 各月の JSON からは、その月の日だけを使う (前後の月が混ざっていても二重にならないように)
+    const days = rows.results.flatMap(r => parseScheduleMonth(JSON.parse(r.json), Number(r.month.slice(0, 4)))
+      .filter(d => d.date.slice(0, 7) === `${r.month.slice(0, 4)}-${r.month.slice(4)}`))
+      .filter(d => d.meetings.length && d.date >= from && d.date <= to);
+    const withRaces = await db.prepare("SELECT DISTINCT date FROM jra_races WHERE date >= ?").bind(from).all<{ date: string }>();
+    const has = new Set(withRaces.results.map(r => r.date));
+    return json(days.map(d => ({ ...d, hasRaces: has.has(d.date) })), 200, 300);
+  }
+
+  if (path === "live/races") {
+    // 今日以降に出馬表がある日。なければ直近の開催 (結果が出たあとの振り返り用)
+    let dates = (await db.prepare("SELECT DISTINCT date FROM jra_races WHERE date >= ? ORDER BY date").bind(jstToday()).all<{ date: string }>()).results.map(r => r.date);
+    if (!dates.length) dates = (await db.prepare("SELECT DISTINCT date FROM jra_races ORDER BY date DESC LIMIT 2").all<{ date: string }>()).results.map(r => r.date).reverse();
+    if (!dates.length) return json({ dates: [], races: [] }, 200, 60);
+    const races = await db.prepare(
+      `SELECT id, date, venue, race_no, post_time, name, grade, cond, surface, distance, field, card_at, card IS NOT NULL AS has_card
+       FROM jra_races WHERE date IN (${dates.map(() => "?").join(",")}) ORDER BY date, venue, race_no`
+    ).bind(...dates).all<any>();
+    return json({
+      dates,
+      races: races.results.map(r => ({ ...r, venueName: VENUE_NAMES[r.venue] ?? r.venue, hasCard: !!r.has_card, has_card: undefined })),
+    }, 200, 60);
+  }
+
+  if (path === "live/race") {
+    const id = q.get("id") ?? "";
+    if (!/^\d{8}-\d{2}-\d{2}$/.test(id)) return json({ error: "id の形式が正しくありません" }, 400);
+    const r = await db.prepare("SELECT * FROM jra_races WHERE id = ?").bind(id).first<any>();
+    if (!r) return json({ error: "見つかりません" }, 404);
+    return json({ ...r, venueName: VENUE_NAMES[r.venue] ?? r.venue, card: r.card ? JSON.parse(r.card) : null }, 200, 60);
+  }
+
+  if (path === "live/status") {
+    const rows = await db.prepare("SELECT key, value FROM jra_state WHERE key IN ('last_tick', 'last_ok', 'last_error', 'top')").all<{ key: string; value: string }>();
+    return json(Object.fromEntries(rows.results.map(r => [r.key, r.value])), 200, 30);
+  }
+  return json({ error: "Not Found" }, 404);
+}
+
 export const onRequest = async ({ request, env, params }: Ctx): Promise<Response> => {
   const url = new URL(request.url);
   const q = url.searchParams;
@@ -255,6 +308,8 @@ export const onRequest = async ({ request, env, params }: Ctx): Promise<Response
   try {
     const user = await userApi(path, request, env);
     if (user) return user;
+    const live = await liveApi(path, q, env);
+    if (live) return live;
     switch (path) {
       case "health": return json({ status: "ok", version: "2.0.0", runtime: "cloudflare-pages" });
       case "library/status": return json(await d("status"), 200, 3600);

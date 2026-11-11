@@ -100,6 +100,11 @@
           <div><p class="eyebrow">Prediction</p><h1 class="title">レース予想</h1></div>
           <div class="seg" id="race-tabs" role="tablist"></div>
         </header>
+        <!-- JRA の実際の出馬表 (自動取得)。データがないときは隠して、上のサンプルのタブを使う -->
+        <div class="live-pick card" id="live-pick" hidden>
+          <div class="live-row"><div class="seg small" id="live-dates" aria-label="開催日"></div><div class="seg small" id="live-venues" aria-label="競馬場"></div></div>
+          <div class="live-races" id="live-races" aria-label="レース"></div>
+        </div>
         <div class="race-hero card" id="race-hero"></div>
         <div class="grid-2">
           <section class="card">
@@ -126,6 +131,11 @@
           <div class="table-wrap"><table class="table" id="entry-table"></table></div>
         </section>
         <div class="actions"><button class="btn primary" id="race-to-sim" type="button"><svg><use href="/static/icons/sprite.svg#i-rotate-3d"/></svg>このレースを3Dで見る</button></div>
+        <section class="card">
+          <header class="card-head"><h3>これからの開催</h3></header>
+          <div class="schedule" id="schedule"><p class="muted">読み込み中</p></div>
+          <p class="fine">出典: JRA 公式サイト (開催日程・出馬表・オッズ)。人の操作なしで自動的に取り込み、更新しています。</p>
+        </section>
       </section>
 
       <!-- SIM -->

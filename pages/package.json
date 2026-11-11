@@ -6,7 +6,7 @@
     "build": "sh build.sh",
     "dev": "wrangler pages dev",
     "deploy": "sh build.sh && wrangler pages deploy",
-    "test": "node test-functions.mjs",
+    "test": "node test-live.mjs && node test-functions.mjs",
     "db:migrate": "wrangler d1 migrations apply keiba-vision-db --remote",
     "data:upload": "sh upload-data.sh"
   },

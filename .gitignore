@@ -25,3 +25,6 @@ Thumbs.db
 pages/dist/
 pages/node_modules/
 pages/.wrangler/
+
+# Zenn の記事の下書き (リポジトリには含めない)
+zenn/

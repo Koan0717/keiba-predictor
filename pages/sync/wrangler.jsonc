@@ -1,0 +1,15 @@
+// keiba-vision-sync: JRA 公式サイトの開催日程・出馬表・オッズを 1 分ごとに少しずつ取り込む Worker
+// デプロイ: cd pages/sync && npx wrangler deploy
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "keiba-vision-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-11",
+  // 1 分ごとに起動 (1 回の起動で JRA へのリクエストは最大 1 件)
+  "triggers": { "crons": ["* * * * *"] },
+  // Pages (keiba-vision) と同じ D1 データベース
+  "d1_databases": [
+    { "binding": "DB", "database_name": "keiba-vision-db", "database_id": "cb7e87b9-392c-4f2a-879c-e922525824a1", "migrations_dir": "../migrations" }
+  ],
+  "observability": { "enabled": true }
+}
