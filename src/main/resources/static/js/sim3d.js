@@ -14,6 +14,7 @@ import { GLTFLoader } from "/static/vendor/GLTFLoader.js";
 import { clone as cloneSkinned } from "/static/vendor/SkeletonUtils.js";
 import { OrbitControls } from "/static/vendor/OrbitControls.js";
 import { coatOf, margin } from "./util.js";
+import { makeJockey, makeSaddle } from "./jockey.js";
 
 // 距離の単位はすべて「メートル」。3D 空間の 1 単位 = 1m として扱う。
 const TRACK_W = 24; // コース幅 (m)
@@ -228,6 +229,7 @@ export class RaceSim {
     this.protoScale = HORSE_LEN / Math.max(size.x, size.z);
     this.protoAlongX = size.x > size.z; // モデルの前後方向
     this.horseHeight = size.y * this.protoScale;
+    this.horseHalfWidth = (Math.min(size.x, size.z) * this.protoScale) / 2; // 胴の半分の幅 (騎手の脚・ゼッケンの位置)
     this.horseProto.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
@@ -341,7 +343,13 @@ export class RaceSim {
       const holder = new THREE.Group();
       holder.add(root);
       if (this.protoAlongX) root.rotation.y = -Math.PI / 2;
-      holder.add(this.makeJockey(f.silk));
+      // children[1] = 騎手 (走るときに弾ませる)、children[2] = 鞍とゼッケン (馬と一緒に動く)
+      const seat = new THREE.Vector3(0, this.horseHeight * 0.72, 0.15);
+      const jockey = makeJockey({ cap: f.silk, name: f.name, halfWidth: this.horseHalfWidth * 0.85 });
+      jockey.position.copy(seat);
+      const saddle = makeSaddle({ num: f.num, halfWidth: this.horseHalfWidth * 0.85 });
+      saddle.position.copy(seat);
+      holder.add(jockey, saddle);
       // AnimationMixer: モデルのアニメーションを再生する仕組み。発走前は Idle、スタートで Gallop に切り替える。
       // 再生位置を馬ごとにずらし (Math.random)、全頭の脚がそろって動く不自然さを避ける。
       const mixer = new THREE.AnimationMixer(root);
@@ -384,37 +392,6 @@ export class RaceSim {
       9,
       mid.z + out.z * 36 - mid.dz * 18,
     );
-  }
-
-  // 騎手は胴 (カプセル)・頭 (球)・脚 (白いカプセル) の簡単な形。胴と帽子を枠の色 (勝負服) にする。
-  makeJockey(color) {
-    const g = new THREE.Group();
-    const silk = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
-    const white = new THREE.MeshStandardMaterial({
-      color: 0xf2f2f2,
-      roughness: 0.7,
-    });
-    const torso = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.17, 0.32, 4, 10),
-      silk,
-    );
-    torso.rotation.x = 1.0; // 前傾
-    torso.position.set(0, 0.25, 0.05);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), silk);
-    head.position.set(0, 0.45, 0.32);
-    const legs = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.09, 0.3, 4, 8),
-      white,
-    );
-    legs.rotation.x = -0.4;
-    legs.position.set(0, 0.02, -0.02);
-    [torso, head, legs].forEach((m) => {
-      m.castShadow = true;
-      g.add(m);
-    });
-    g.position.set(0, this.horseHeight * 0.72, 0.15);
-    g.userData.jockey = true;
-    return g;
   }
 
   // コース周りの景色を作る: 芝生の地面 → 走路 → ラチ → ハロン棒・ゴール板 → スタンド → 照明塔・木 → 大型ビジョン → 発馬機。
@@ -805,10 +782,13 @@ export class RaceSim {
         // 騎手を速度に合わせて上下に揺らし、馬の上で弾んでいるように見せる。
         h.phase += dt * h.v * 0.45;
         const j = h.root.children[1];
-        if (j)
-          j.position.y =
-            this.horseHeight * 0.72 +
-            Math.sin(h.phase) * 0.05 * Math.min(1, h.v / 10);
+        if (j) {
+          const run = Math.min(1, h.v / 10);
+          j.position.y = this.horseHeight * 0.72 + Math.sin(h.phase) * 0.05 * run;
+          // 腕は馬の首の動きに合わせて前後に (手綱を押す)。ゴール前 400m からは大きく
+          const push = h.s > this.startS + this.distance - 400 && !h.finished ? 0.2 : 0.09;
+          if (j.userData.arms) j.userData.arms.rotation.x = Math.sin(h.phase + 1.2) * push * run;
+        }
         const goal = this.startS + this.distance;
         if (!h.finished && h.s >= goal) {
           h.finished = true;

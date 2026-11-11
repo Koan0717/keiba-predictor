@@ -28,7 +28,7 @@ import {
   seeded,
   setTokenProvider,
 } from "./util.js";
-import { marketProbs, kelly, coatName, simulateOrders, strategies, commentary, BET, BET_TYPES, hits, probOf, oddsFrom, modelProbs, planTickets, payoutOf } from "./race-model.js";
+import { marketProbs, kelly, coatName, simulateOrders, strategies, commentary, BET, BET_TYPES, hits, probOf, oddsFrom, modelProbs, planTickets, payoutOf, features } from "./race-model.js";
 
 // Firebase の Web SDK (公式 CDN)。/api/config に設定がある環境 (Cloudflare Pages 版) だけで読み込む
 const FIREBASE_SDK = "https://www.gstatic.com/firebasejs/13.2.0/";
@@ -1181,7 +1181,12 @@ async function raceToSim() {
     speed: h.speedIndex,
     style: STYLE_CODE[h.runningStyle] ?? 2,
     stamina: TRAINING[h.trainingScore] ?? 0.7,
+    num: h.horseNumber,
+    waku: h.postPosition,
   }));
+  // 本物の馬番・枠のまま走らせる (テンプレートと同じ扱い。馬を足したり外したりすると 1 から振り直す)
+  state.template = { title: r.name, sub: `${r.racecourse} ${r.courseType === "TURF" ? "芝" : "ダート"}${r.distanceMeters}m`, sig: fieldSig(), replay: null, on: false };
+  if ($("#tpl-banner")) renderTemplateBanner();
   presetSim({
     course: course?.id,
     distance: r.distanceMeters,
@@ -1402,6 +1407,10 @@ function addToField(v) {
 
 // シミュレーション画面の出走表。脚質を変えたり馬を外したりしたら、すぐにレースを組み直す。
 // 2 頭以上いないとスタートできない。
+// 出走表の i 番目の馬番と枠。実際のレースのテンプレートなら本物の馬番・枠 (取消があると番号が飛ぶ)、それ以外は 1 から順番
+const fieldNum = (i) => state.field[i]?.num ?? i + 1;
+const fieldWaku = (i) => state.field[i]?.waku ?? wakuOf(i + 1, state.field.length);
+
 function renderField() {
   const n = state.field.length;
   $("#sim-count").textContent = `${n} / 18`;
@@ -1409,7 +1418,7 @@ function renderField() {
     state.field
       .map(
         (f, i) => `<li>
-    ${wakuBadge(i + 1, wakuOf(i + 1, n))}<span class="nm" title="${esc(f.name)}">${esc(f.name)}</span>
+    ${wakuBadge(fieldNum(i), fieldWaku(i))}<span class="nm" title="${esc(f.name)}">${esc(f.name)}</span>
     <select data-style="${i}" aria-label="${esc(f.name)} の脚質">${STYLE_NAMES.map((s, k) => `<option value="${k}" ${k === f.style ? "selected" : ""}>${s}</option>`).join("")}</select>
     <button type="button" data-remove="${i}" aria-label="外す">${icon("x")}</button></li>`,
       )
@@ -1485,6 +1494,14 @@ async function prepareSim() {
   const n = state.field.length;
   const seed = (Math.random() * 2 ** 31) | 0;
   let scores;
+  const tpl = state.template;
+  if (tpl && tpl.sig !== fieldSig()) {
+    // テンプレートから馬を足したり外したりしたら、ふつうのレースに戻す (馬番も 1 から振り直す)
+    state.field.forEach((f) => { delete f.num; delete f.waku; });
+    state.template = null;
+    renderField();
+    renderTemplateBanner();
+  }
   if (z) {
     state.field.forEach((f, i) =>
       z.set_horse(
@@ -1505,16 +1522,19 @@ async function prepareSim() {
     );
   }
   const field = state.field.map((f, i) => {
-    const waku = wakuOf(i + 1, n);
+    const waku = fieldWaku(i);
     return {
       name: f.name,
       coat: f.coat,
       style: f.style,
-      num: i + 1,
+      num: fieldNum(i),
       waku,
       silk: wakuCss(waku) || "#ffffff",
     };
   });
+  const replay = state.template?.replay && state.template.on;
+  if (replay) scores = state.template.replay; // 本物の着順とタイム差
+  state.lastReplay = replay ? state.template : null;
   state.sim.setup({ course, distance, surface, field, scores });
   gamePrepared(z ? gameOrders : null);
   state.lastSim = {
@@ -1531,6 +1551,191 @@ async function prepareSim() {
     order: field.map((_, i) => i),
     remain: course.category === "ばんえい" ? 200 : distance,
     t: 0,
+  });
+}
+
+/* ---------- テンプレート (実際のレース・名馬の夢の対決) ---------- */
+// 実際のレース: Worker が集めた過去の JRA のレース (結果つき) と、今週の出馬表。
+//   競馬場・距離・馬場・出走馬・馬番・毛色・脚質は本物。能力 (スピード) はレース予想と同じモデルで出馬表から計算する。
+//   「実際の結果を再現」を選ぶと、乱数の代わりに本物の着順と走破タイムの差で走らせる。
+// 名馬の夢の対決: 名鑑の「主な勝ち鞍」から、同じ GI を勝った馬を集めて、そのレースの舞台で走らせる。
+const DREAM = [
+  { title: "歴代の日本ダービー馬", races: ["東京優駿"], course: "tokyo", distance: 2400, surface: "芝" },
+  { title: "歴代の有馬記念馬", races: ["有馬記念"], course: "nakayama", distance: 2500, surface: "芝" },
+  { title: "歴代のジャパンカップ馬", races: ["ジャパンカップ", "ジャパンC"], course: "tokyo", distance: 2400, surface: "芝" },
+  { title: "歴代の天皇賞 (秋) 馬", races: ["天皇賞（秋）"], course: "tokyo", distance: 2000, surface: "芝" },
+  { title: "歴代の天皇賞 (春) 馬", races: ["天皇賞（春）"], course: "kyoto", distance: 3200, surface: "芝" },
+  { title: "歴代の宝塚記念馬", races: ["宝塚記念"], course: "hanshin", distance: 2200, surface: "芝" },
+  { title: "歴代の皐月賞馬", races: ["皐月賞"], course: "nakayama", distance: 2000, surface: "芝" },
+  { title: "歴代の菊花賞馬", races: ["菊花賞"], course: "kyoto", distance: 3000, surface: "芝" },
+  { title: "歴代の桜花賞馬", races: ["桜花賞"], course: "hanshin", distance: 1600, surface: "芝" },
+  { title: "歴代のオークス馬", races: ["優駿牝馬"], course: "tokyo", distance: 2400, surface: "芝" },
+  { title: "歴代の安田記念馬", races: ["安田記念"], course: "tokyo", distance: 1600, surface: "芝" },
+  { title: "歴代のスプリンターズS 馬", races: ["スプリンターズS", "スプリンターズステークス"], course: "nakayama", distance: 1200, surface: "芝" },
+  { title: "歴代のフェブラリーS 馬", races: ["フェブラリーS", "フェブラリーステークス"], course: "tokyo", distance: 1600, surface: "ダート" },
+  { title: "歴代の東京大賞典馬", races: ["東京大賞典"], course: "ohi", distance: 2000, surface: "ダート" },
+  { title: "三冠馬の対決", races: ["皐月賞"], all: ["皐月賞", "東京優駿", "菊花賞"], course: "tokyo", distance: 2400, surface: "芝", note: "皐月賞・日本ダービー・菊花賞をすべて勝った馬" },
+  { title: "牝馬三冠馬の対決", races: ["桜花賞"], all: ["桜花賞", "優駿牝馬", "秋華賞"], course: "kyoto", distance: 2000, surface: "芝", note: "桜花賞・オークス・秋華賞をすべて勝った馬" },
+  { title: "グランプリ制覇の馬", races: ["有馬記念"], all: ["有馬記念", "宝塚記念"], course: "nakayama", distance: 2500, surface: "芝", note: "有馬記念と宝塚記念の両方を勝った馬" },
+];
+const fieldSig = () => state.field.map((f) => f.name).join("|");
+const toSeconds = (t) => {
+  const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)$/.exec(t || "");
+  return m ? (+m[1] || 0) * 60 + +m[2] : null;
+};
+
+async function openTemplates() {
+  openSheet(`<div class="tpl"><p class="eyebrow">Templates</p><h2>テンプレートから選ぶ</h2>
+    <div class="seg small" id="tpl-tabs"><button data-t="real" class="on" type="button">実際のレース</button><button data-t="dream" type="button">名馬の夢の対決</button></div>
+    <div id="tpl-list"><p class="muted">読み込み中</p></div></div>`);
+  const show = async (t) => {
+    $$("#tpl-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === t));
+    $("#tpl-list").innerHTML = t === "real" ? await realTemplatesHtml() : dreamTemplatesHtml();
+    $$("#tpl-list [data-res]").forEach((b) => b.addEventListener("click", () => loadResultTemplate(b.dataset.res)));
+    $$("#tpl-list [data-live]").forEach((b) => b.addEventListener("click", () => loadLiveTemplate(b.dataset.live)));
+    $$("#tpl-list [data-dream]").forEach((b) => b.addEventListener("click", () => loadDreamTemplate(DREAM[+b.dataset.dream])));
+  };
+  $$("#tpl-tabs button").forEach((b) => b.addEventListener("click", () => show(b.dataset.t)));
+  show("real");
+}
+
+let tplResults = null; // 過去のレース (一度読んだら使い回す)
+async function realTemplatesHtml() {
+  tplResults ??= await api("/api/live/results?limit=120").catch(() => []);
+  const live = await api("/api/live/races").catch(() => null);
+  const card = (attr, id, top, title, sub) =>
+    `<button type="button" class="tpl-card" ${attr}="${esc(id)}"><span class="fine">${top}</span><b>${title}</b><span class="muted">${sub}</span></button>`;
+  const past = tplResults
+    .slice()
+    .sort((a, b) => (/G/.test(b.grade) ? 1 : 0) - (/G/.test(a.grade) ? 1 : 0) || b.date.localeCompare(a.date))
+    .map((r) => {
+      const win = r.result.order.find((o) => o.place === 1);
+      const h = r.card.header;
+      return card("data-res", r.id, `${esc(r.date.replaceAll("-", "/"))} ${esc(r.venueName)} ${r.race_no}R`, `${gradeBadge(r.grade)} ${esc(r.name || h.name)}`,
+        `${esc((h.surface || "").split(/\s/)[0])}${h.distance}m ・ ${r.card.runners.length}頭${win ? ` ・ 勝ち馬は ${win.pop ?? "-"}番人気` : ""}`); // 馬名は出さない (予想ゲームのネタバレになるため)
+    });
+  const week = (live?.races || [])
+    .filter((r) => r.hasCard && r.date >= jstNow()[0])
+    .sort((a, b) => (GRADE_RANK[b.grade] ?? 0) - (GRADE_RANK[a.grade] ?? 0) || a.date.localeCompare(b.date))
+    .slice(0, 24)
+    .map((r) => card("data-live", r.id, `${mdw(r.date)} ${esc(r.venueName)} ${r.race_no}R ・ これから`, `${gradeBadge(r.grade)} ${esc(r.name)}`, `${esc(r.surface)}${r.distance ?? ""}m ・ ${r.field ?? "-"}頭`));
+  return `
+    ${week.length ? `<h3 class="sub-title">今週のレース (出馬表)</h3><p class="fine">本物の出走馬で、予想 (乱数) どおりに走らせます。</p><div class="tpl-grid">${week.join("")}</div>` : ""}
+    <h3 class="sub-title">過去のレース (結果つき)</h3>
+    <label class="check"><input type="checkbox" id="tpl-replay" checked> 実際の結果を再現する (本物の着順とタイム差で走らせる)</label>
+    ${past.length ? `<div class="tpl-grid">${past.join("")}</div>` : `<p class="muted">過去のレースを JRA 公式サイトから自動で集めています。しばらくすると表示されます。</p>`}
+    <p class="fine">出典: JRA 公式サイト。能力はレース予想と同じモデルで、レース前の出馬表 (過去 4 走) から計算しています。勝負服の柄は馬名から自動で決めたもので、実際の馬主の服色ではありません。</p>`;
+}
+
+function dreamTemplatesHtml() {
+  return `<p class="fine">競走馬名鑑の「主な勝ち鞍」から、同じ GI を勝った馬を能力値の高い順に最大 18 頭集め、そのレースの舞台で走らせます。年代の違う名馬どうしの、実際にはなかった対決です。</p>
+    <div class="tpl-grid">${DREAM.map((d, i) => {
+      const c = state.courses.find((x) => x.id === d.course);
+      return `<button type="button" class="tpl-card" data-dream="${i}"><span class="fine">${esc(c?.short ?? "")} ${d.surface}${d.distance}m</span><b>${esc(d.title)}</b><span class="muted">${esc(d.note ?? `${d.races[0]} を勝った馬`)}</span></button>`;
+    }).join("")}</div>`;
+}
+
+// 実際のレースの出馬表 → 出走表。取消・除外は外す。脚質と能力はレース予想と同じモデル
+function fieldFromCard(card, cond, out = new Set()) {
+  const runners = card.runners.filter((x) => !x.scratched && x.num && !out.has(x.num)).slice(0, 18);
+  return runners.map((x) => {
+    const f = features(x, cond);
+    return { key: x.name, name: x.name, coat: coatName(x.color), speed: Math.round(f.mu * 1000) / 10, style: f.style, stamina: 0.7, num: x.num, waku: x.waku };
+  });
+}
+function applyTemplate({ title, sub, course, distance, surface, field, replay = null, real = null }) {
+  state.field = field;
+  state.template = { title, sub, sig: fieldSig(), replay, real, on: !!replay };
+  closeSheet();
+  renderTemplateBanner();
+  presetSim({ course, distance, surface, pace: "1.0" });
+  toast(`${title} を読み込みました`);
+}
+
+function loadResultTemplate(id) {
+  const r = tplResults.find((x) => x.id === id);
+  if (!r) return;
+  const h = r.card.header;
+  const cond = { surface: h.surface === "ダート" ? "ダート" : "芝", distance: h.distance };
+  const out = new Set(r.result.order.filter((o) => /取消|除外/.test(o.status)).map((o) => o.num));
+  const field = fieldFromCard(r.card, cond, out);
+  // 本物の走破タイム → 「出来」。3D は T = 基準 × (1 + (1着の出来 − 出来) × 0.12) なので、
+  // 出来 = 1 − (タイム ÷ 1着のタイム − 1) ÷ 0.12 とすれば、タイムの比が本物と同じになる。同タイムは着順で並べる
+  const byNum = new Map(r.result.order.map((o) => [o.num, o]));
+  const times = field.map((f) => toSeconds(byNum.get(f.num)?.time));
+  const best = Math.min(...times.filter((t) => t != null));
+  const worst = Math.max(...times.filter((t) => t != null));
+  const replay = field.map((f, i) => {
+    const o = byNum.get(f.num);
+    const t = times[i] ?? worst + 3; // 競走中止などタイムのない馬は最後に
+    return 1 - (t / best - 1) / 0.12 - (o?.place ?? 99) * 1e-5;
+  });
+  const wantReplay = $("#tpl-replay")?.checked ?? true;
+  const real = new Map(r.result.order.map((o) => [o.num, { time: o.time, margin: o.margin }]));
+  applyTemplate({
+    title: `${r.name || h.name}`,
+    sub: `${r.date.replaceAll("-", "/")} ${r.venueName} ${(h.surface || "").split(/\s/)[0]}${h.distance}m`,
+    course: COURSE_BY_SHORT(r.venueName)?.id,
+    distance: h.distance,
+    surface: cond.surface,
+    field,
+    replay: Number.isFinite(best) ? replay : null,
+    real,
+  });
+  if (!wantReplay && state.template) { state.template.on = false; renderTemplateBanner(); prepareSim(); }
+}
+
+async function loadLiveTemplate(id) {
+  const r = await api(`/api/live/race?id=${encodeURIComponent(id)}`).catch(() => null);
+  if (!r?.card) return toast("出馬表を読み込めませんでした");
+  const h = r.card.header;
+  const cond = { surface: (h.surface || r.surface) === "ダート" ? "ダート" : "芝", distance: h.distance || r.distance };
+  applyTemplate({ title: h.name || r.name, sub: `${r.date.replaceAll("-", "/")} ${r.venueName} ${cond.surface}${cond.distance}m (これから)`, course: COURSE_BY_SHORT(r.venueName)?.id, distance: cond.distance, surface: cond.surface, field: fieldFromCard(r.card, cond) });
+}
+
+async function loadDreamTemplate(d) {
+  const pages = await Promise.all(d.races.map((q) => api(`/api/horses?q=${encodeURIComponent(q)}&limit=200&sort=rating`).catch(() => ({ items: [] }))));
+  const isGI = (w) => /^(G|Jpn)I$/.test(w.grade);
+  const won = (v, race) => v.horse.bigWins.some((w) => w.race === race && isGI(w));
+  const seen = new Set();
+  const list = pages
+    .flatMap((p) => p.items)
+    .filter((v) => !seen.has(v.horse.title) && seen.add(v.horse.title))
+    .filter((v) => (d.all ? d.all.every((r) => won(v, r)) : d.races.some((r) => won(v, r))))
+    .sort((a, b) => b.rating - a.rating)
+    .slice(0, 18);
+  if (list.length < 2) return toast("名鑑に該当する馬が 2 頭以上いません");
+  applyTemplate({
+    title: d.title,
+    sub: `${state.courses.find((c) => c.id === d.course)?.short ?? ""} ${d.surface}${d.distance}m ・ ${list.length}頭`,
+    course: d.course,
+    distance: d.distance,
+    surface: d.surface,
+    field: list.map((v) => ({ key: v.horse.title, title: v.horse.title, name: v.horse.name, coat: v.horse.color, rating: v.rating, surface: v.surface, bestDistance: v.bestDistance, style: defaultStyle(v), stamina: 0.8 })),
+  });
+}
+
+// 選んでいるテンプレートの表示と、「実際の結果を再現 / 予想 (乱数) で走らせる」の切り替え
+function renderTemplateBanner() {
+  const t = state.template, el = $("#tpl-banner");
+  el.hidden = !t;
+  if (!t) return;
+  el.innerHTML = `<div><b>${esc(t.title)}</b><span class="fine">${esc(t.sub)}</span></div>
+    ${t.replay ? `<div class="seg small" role="radiogroup" aria-label="走らせ方"><button type="button" data-rp="1" class="${t.on ? "on" : ""}">実際の結果を再現</button><button type="button" data-rp="0" class="${t.on ? "" : "on"}">予想 (乱数) で走らせる</button></div>` : ""}
+    <button type="button" class="tpl-clear" aria-label="テンプレートをやめる">${icon("x")}</button>`;
+  $$("#tpl-banner [data-rp]").forEach((b) =>
+    b.addEventListener("click", () => {
+      t.on = b.dataset.rp === "1";
+      renderTemplateBanner();
+      prepareSim();
+    }),
+  );
+  $("#tpl-banner .tpl-clear").addEventListener("click", () => {
+    state.field.forEach((f) => { delete f.num; delete f.waku; });
+    state.template = null;
+    renderTemplateBanner();
+    renderField();
+    prepareSim();
   });
 }
 
@@ -1605,7 +1810,7 @@ function renderGame() {
       const k = game.sel.indexOf(i);
       const m = marks[rank.indexOf(i)];
       return `<button type="button" data-i="${i}" class="${k >= 0 ? "on" : ""}" ${ready ? "" : "disabled"} aria-pressed="${k >= 0}">
-        ${wakuBadge(i + 1, wakuOf(i + 1, game.n))}<span class="nm">${esc(f.name)}</span>
+        ${wakuBadge(fieldNum(i), fieldWaku(i))}<span class="nm">${esc(f.name)}</span>
         <span class="od num">${ready ? `${gameOdds("win", [i])}倍` : ""}</span>${m ? `<span class="mk ${MARK_CLASS[m]}" title="モデルの印">${m}</span>` : ""}
         ${k >= 0 && bt.ordered ? `<span class="ord">${k + 1}着</span>` : ""}</button>`;
     })
@@ -1623,12 +1828,12 @@ function renderGame() {
   const full = game.sel.length === bt.picks;
   const amount = Math.floor((+$("#bet-amount").value || 0) / 100) * 100;
   $("#bet-pick").innerHTML = full
-    ? `<b>${bt.name} ${game.sel.map((i) => i + 1).join(bt.ordered ? " → " : " - ")}</b> <span class="num">${gameOdds(game.type, game.sel)}倍</span>`
+    ? `<b>${bt.name} ${game.sel.map(fieldNum).join(bt.ordered ? " → " : " - ")}</b> <span class="num">${gameOdds(game.type, game.sel)}倍</span>`
     : `あと ${bt.picks - game.sel.length} 頭選んでください`;
   $("#bet-add").disabled = !ready || !full || amount < 100 || amount > game.wallet;
   $("#bet-slip").innerHTML = game.slip
     .map(
-      (t, k) => `<li><span>${BET[t.type].name} ${t.picks.map((i) => i + 1).join(BET[t.type].ordered ? "→" : "-")}</span>
+      (t, k) => `<li><span>${BET[t.type].name} ${t.picks.map(fieldNum).join(BET[t.type].ordered ? "→" : "-")}</span>
       <span class="num">${t.odds}倍 × ${yen(t.amount)}</span>${game.locked ? "" : `<button type="button" data-rm="${k}" aria-label="取り消す">${icon("x")}</button>`}</li>`,
     )
     .join("");
@@ -1664,7 +1869,7 @@ function settleGame(results) {
     const pay = hit ? Math.floor((t.amount * t.odds) / 10) * 10 : 0;
     spent += t.amount;
     back += pay;
-    return `<li class="${hit ? "hit" : ""}">${icon(hit ? "circle-check" : "circle-x")}<span>${BET[t.type].name} ${t.picks.map((i) => i + 1).join(BET[t.type].ordered ? "→" : "-")}</span><span class="num">${hit ? `+${yen(pay)}` : `−${yen(t.amount)}`}</span></li>`;
+    return `<li class="${hit ? "hit" : ""}">${icon(hit ? "circle-check" : "circle-x")}<span>${BET[t.type].name} ${t.picks.map(fieldNum).join(BET[t.type].ordered ? "→" : "-")}</span><span class="num">${hit ? `+${yen(pay)}` : `−${yen(t.amount)}`}</span></li>`;
   });
   game.wallet += back;
   game.races += 1;
@@ -1714,8 +1919,10 @@ function updateHud({ order, remain, t }, force) {
 // 「もう一度」は新しい展開で、「リプレイ」は同じ展開でもう一度走らせる。
 function showResult(results) {
   $("#sim-result").innerHTML =
-    `<h3>結果</h3><ol class="result-list">${results.map((r, k) => `<li><span class="pos">${k + 1}</span>${wakuBadge(r.num, r.waku)}<span>${esc(r.name)}</span><span class="gap">${k === 0 ? `${Math.floor(r.time / 60)}:${(r.time % 60).toFixed(1).padStart(4, "0")}` : esc(r.margin)}</span></li>`).join("")}</ol>
+    `<h3>結果</h3><ol class="result-list">${results.map((r, k) => `<li><span class="pos">${k + 1}</span>${wakuBadge(r.num, r.waku)}<span>${esc(r.name)}</span><span class="gap">${state.lastReplay?.real?.get(r.num) ? esc(k === 0 ? state.lastReplay.real.get(r.num).time : state.lastReplay.real.get(r.num).margin) : k === 0 ? `${Math.floor(r.time / 60)}:${(r.time % 60).toFixed(1).padStart(4, "0")}` : esc(r.margin)}</span></li>`).join("")}</ol>
     <div class="btn-row"><button class="btn primary small" id="sim-again" type="button">${icon("refresh-cw")}もう一度 (別の展開)</button><button class="btn ghost small" id="sim-replay" type="button">${icon("rotate-ccw")}リプレイ</button></div>`;
+  if (state.lastReplay)
+    $("#sim-result").insertAdjacentHTML("beforeend", `<p class="fine replay-note">${icon("info")}${esc(state.lastReplay.title)} の実際の着順とタイム差で再現しました (出典: JRA 公式サイト)。</p>`);
   $("#sim-result").insertAdjacentHTML("beforeend", settleGame(results));
   $("#sim-result").hidden = false;
   $("#game-reset")?.addEventListener("click", resetWallet);
@@ -1766,6 +1973,7 @@ init.sim = async () => {
     state.sim.start();
   });
   setupGame();
+  $("#tpl-open").addEventListener("click", openTemplates);
   $("#sim-clear").addEventListener("click", () => {
     state.field = [];
     renderField();

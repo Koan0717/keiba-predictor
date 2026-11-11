@@ -3216,3 +3216,96 @@ button.chip:hover {
         position: static;
     }
 }
+
+/* 3D シミュレーションのテンプレート */
+.tpl-open {
+    margin-bottom: 12px;
+}
+.tpl-banner {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: start;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    border-radius: var(--radius-s);
+    background: var(--accent-soft);
+    font-size: 13px;
+}
+.tpl-banner > div:first-child {
+    display: grid;
+    gap: 2px;
+}
+.tpl-banner .seg {
+    grid-column: 1 / -1;
+    grid-row: 2;
+}
+.tpl-clear {
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+    padding: 2px;
+    display: grid;
+}
+.tpl-clear svg {
+    width: 16px;
+    height: 16px;
+}
+.tpl {
+    padding: 28px 24px 24px;
+}
+.tpl h2 {
+    font: 700 24px var(--serif);
+    margin: 4px 0 12px;
+}
+.tpl .seg {
+    margin-bottom: 8px;
+}
+.tpl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 8px;
+    margin: 8px 0 12px;
+}
+.tpl-card {
+    display: grid;
+    gap: 3px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: var(--radius-s);
+    background: var(--bg-sunken);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.tpl-card:hover {
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+.tpl-card b {
+    font-size: 15px;
+}
+.tpl-card .badge {
+    margin-right: 4px;
+}
+.tpl-card .muted {
+    font-size: 12px;
+}
+.tpl .check {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 13px;
+    margin: 6px 0;
+}
+.replay-note {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 10px;
+}
+.replay-note svg {
+    width: 14px;
+    height: 14px;
+}
