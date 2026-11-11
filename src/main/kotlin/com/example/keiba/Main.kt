@@ -208,7 +208,7 @@ fun main(args: Array<String>) {
             // ローカル版はそれを中継するだけ (JRA へ直接アクセスする所を 1 か所にまとめて、負荷を増やさないため)。
             get("/api/live/{name}") {
                 val name = call.parameters["name"]
-                if (name !in setOf("schedule", "races", "race", "status")) return@get call.respond(HttpStatusCode.NotFound)
+                if (name !in setOf("schedule", "races", "race", "results", "status")) return@get call.respond(HttpStatusCode.NotFound)
                 val qs = call.request.queryString().let { if (it.isEmpty()) "" else "?$it" }
                 try {
                     val req = java.net.http.HttpRequest.newBuilder(URI("$LIVE_ORIGIN/api/live/$name$qs"))

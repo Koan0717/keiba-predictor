@@ -20,11 +20,15 @@ export function jst(now: number) {
 
 export type Meeting = { cname: string; date: string; fetched_at: number };
 export type RaceDue = { id: string; cname: string; date: string; post_time: string; card_at: number };
+export type ResultDue = { id: string; date: string; cname: string; result_at: number; has_result: number; card_cname: string | null; card_at: number; has_card: number };
 export type Task =
   | { kind: "schedule"; month: string }
   | { kind: "top" }
   | { kind: "meeting"; cname: string }
   | { kind: "card"; id: string; cname: string }
+  | { kind: "results_top" }
+  | { kind: "result"; id: string; cname: string }
+  | { kind: "result_card"; id: string; cname: string }
   | { kind: "idle" };
 
 const toMin = (hhmm: string) => {
@@ -45,7 +49,7 @@ export function cardInterval(r: RaceDue, now: number): number | null {
   return fetchedMin < post + 15 ? 0 : null;
 }
 
-export function plan(now: number, state: Record<string, string>, meetings: Meeting[], races: RaceDue[]): Task {
+export function plan(now: number, state: Record<string, string>, meetings: Meeting[], races: RaceDue[], results: ResultDue[] = []): Task {
   const t = jst(now);
   // 1. 開催日程: 今月・来月・再来月を 12 時間ごと
   for (const k of [0, 1, 2]) {
@@ -69,5 +73,16 @@ export function plan(now: number, state: Record<string, string>, meetings: Meeti
     if (late >= 0 && (!best || late > best.late)) best = { r, late };
   }
   if (best) return { kind: "card", id: best.r.id, cname: best.r.cname };
+  // ここから下は、今週の出馬表の更新に空きがあるときだけ (答え合わせ用の過去の結果)
+  // 5. 結果一覧 (最近の重賞): 土・日・月曜は 1 時間ごと、それ以外は 6 時間ごと
+  if (now - Number(state.results_top ?? 0) > ([6, 0, 1].includes(t.weekday) ? HOUR : 6 * HOUR)) return { kind: "results_top" };
+  // 6. 結果: 終わった日のレース (当日は全レースが終わる 17 時以降)。取れなかったら 3 時間後にまた試す。新しい日付から
+  const ended = (r: ResultDue) => r.date < t.date || (r.date === t.date && t.minutes >= 17 * 60);
+  const retry = (at: number) => now - at > (at ? 3 * HOUR : 0);
+  const res = results.filter(r => !r.has_result && ended(r) && retry(r.result_at)).sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (res) return { kind: "result", id: res.id, cname: res.cname };
+  // 7. 答え合わせに使う出馬表 (確定オッズと、そのときの過去 4 走)
+  const rc = results.filter(r => r.has_result && !r.has_card && r.card_cname && retry(r.card_at)).sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (rc) return { kind: "result_card", id: rc.id, cname: rc.card_cname! };
   return { kind: "idle" };
 }

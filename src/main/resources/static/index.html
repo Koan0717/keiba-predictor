@@ -46,7 +46,9 @@
       <nav class="nav" id="nav">
         <span class="nav-pill" id="nav-pill" aria-hidden="true"></span>
         <a href="#/home" data-view="home"><svg><use href="/static/icons/sprite.svg#i-house"/></svg><span>ホーム</span></a>
+        <a href="#/learn" data-view="learn"><svg><use href="/static/icons/sprite.svg#i-graduation-cap"/></svg><span>はじめての競馬</span></a>
         <a href="#/races" data-view="races"><svg><use href="/static/icons/sprite.svg#i-flag"/></svg><span>レース予想</span></a>
+        <a href="#/results" data-view="results"><svg><use href="/static/icons/sprite.svg#i-chart-line"/></svg><span>予想の成績</span></a>
         <a href="#/sim" data-view="sim"><svg><use href="/static/icons/sprite.svg#i-rotate-3d"/></svg><span>3D シミュレーション</span></a>
         <a href="#/live" data-view="live"><svg><use href="/static/icons/sprite.svg#i-tv"/></svg><span>中継</span></a>
         <p class="nav-label">データ</p>
@@ -106,6 +108,17 @@
           <div class="live-races" id="live-races" aria-label="レース"></div>
         </div>
         <div class="race-hero card" id="race-hero"></div>
+        <!-- 予想の見解 (JRA の実際のレースのとき): 推す理由と、買い方ごとの的中率・回収率 -->
+        <section class="card" id="outlook" hidden>
+          <header class="card-head"><h3>予想の見解</h3><span class="fine" id="outlook-meta"></span></header>
+          <p class="outlook-pace" id="outlook-pace"></p>
+          <div class="outlook-picks" id="outlook-picks"></div>
+          <div id="outlook-danger"></div>
+          <h4 class="sub-title">買い方の比較</h4>
+          <p class="note" id="plan-verdict"></p>
+          <div class="table-wrap"><table class="table" id="plan-table"></table></div>
+          <p class="fine">的中率は 2 万回のシミュレーションで「どれか 1 点でも当たった割合」。回収率は 1 点 100 円ずつ買ったときの払戻の期待値 ÷ 投資額で、100% を超えれば予想上は得です。単勝は実際のオッズ、それ以外は単勝オッズから推定したオッズ (Harville の公式、* 印) を使っています。</p>
+        </section>
         <div class="grid-2">
           <section class="card">
             <header class="card-head"><h3>勝率シミュレーション</h3>
@@ -182,9 +195,51 @@
                 <button class="btn ghost small" id="sim-clear" type="button">クリア</button>
               </div>
             </div>
+            <!-- 予想ゲーム: スタート前に馬券を買い、レースの結果で払い戻す (仮想のお金) -->
+            <div class="field game" id="game">
+              <span>予想ゲーム <em class="num" id="game-wallet"></em></span>
+              <div class="seg small bet-types" id="bet-type" role="radiogroup" aria-label="馬券の種類"></div>
+              <p class="fine" id="bet-rule"></p>
+              <div class="bet-horses" id="bet-horses" aria-label="馬を選ぶ"></div>
+              <div class="bet-line">
+                <span class="bet-pick" id="bet-pick">馬を選んでください</span>
+                <label class="bet-amount"><input id="bet-amount" type="number" min="100" step="100" value="100" aria-label="金額 (円)"><span>円</span></label>
+                <button class="btn ghost small" id="bet-add" type="button" disabled><svg><use href="/static/icons/sprite.svg#i-ticket"/></svg>買う</button>
+              </div>
+              <ul class="bet-slip" id="bet-slip"></ul>
+              <p class="fine">オッズは同じレースを 2 万回走らせた確率から、JRA と同じ控除率 (単勝 20%〜3連単 27.5%) で計算しています。そのため本物と同じく、どの馬券も平均すると賭け金の 72.5〜80% しか戻りません。お金はこの画面の中だけの仮想のものです。</p>
+            </div>
             <button class="btn primary wide" id="sim-start" type="button"><svg><use href="/static/icons/sprite.svg#i-play"/></svg>スタート</button>
             <p class="fine">着順は能力値・脚質・ペース・距離と馬場の適性・乱数から決まります (計算は Zig)。能力値は Wikipedia 記載の戦績から算出した参考値です。</p>
           </aside>
+        </div>
+      </section>
+
+      <!-- RESULTS: 予想の成績 (過去のレースの答え合わせ) -->
+      <section class="view" id="view-results">
+        <header class="page-head"><div><p class="eyebrow">Track record</p><h1 class="title">予想の成績</h1></div></header>
+        <p class="lead muted">JRA の過去のレースを、このアプリの予想モデルでレース前の情報 (確定オッズ・過去 4 走) から予想し、実際の結果と答え合わせしています。結果は自動で増えていきます。</p>
+        <div class="stat-grid" id="res-stats"><p class="muted">読み込み中</p></div>
+        <section class="card">
+          <header class="card-head"><h3>買い方ごとの成績</h3><span class="fine" id="res-count"></span></header>
+          <div class="table-wrap"><table class="table" id="res-plans"></table></div>
+          <div class="res-chart" id="res-chart"></div>
+          <p class="fine">各レースで同じ買い方を 1 点 100 円ずつ続けた場合。払戻は JRA の実際の払戻金です。回収率 100% 未満は損をしていることを表します。</p>
+        </section>
+        <section class="card">
+          <header class="card-head"><h3>レースごとの答え合わせ</h3>
+            <div class="seg small" id="res-filter"><button data-f="all" class="on" type="button">すべて</button><button data-f="graded" type="button">重賞</button><button data-f="hit" type="button">◎ が 3 着以内</button></div>
+          </header>
+          <div class="table-wrap"><table class="table" id="res-table"></table></div>
+        </section>
+      </section>
+
+      <!-- LEARN: はじめての競馬 (チュートリアル) -->
+      <section class="view" id="view-learn">
+        <header class="page-head"><div><p class="eyebrow">Tutorial</p><h1 class="title">はじめての競馬</h1></div></header>
+        <div class="learn">
+          <nav class="learn-toc card" id="learn-toc" aria-label="章"></nav>
+          <article class="learn-body" id="learn-body"></article>
         </div>
       </section>
 

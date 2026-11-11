@@ -5,11 +5,11 @@
 import assert from "node:assert";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { parseTop, parseRaceList, parseCard, parseScheduleMonth, gradeOf } from "./lib/jra.ts";
+import { parseTop, parseRaceList, parseCard, parseScheduleMonth, gradeOf, parseResult, parseResultTop } from "./lib/jra.ts";
 import { plan, cardInterval, MIN, HOUR } from "./sync/src/plan.ts";
 import { tick } from "./sync/src/index.ts";
 import { onRequest } from "./functions/api/[[path]].ts";
-import { features, paceOf, marketProbs, kelly } from "../src/main/resources/static/js/race-model.js";
+import { features, paceOf, marketProbs, kelly, simulateOrders, probOf, hits, harville, oddsFrom, strategies, commentary, BET_TYPES } from "../src/main/resources/static/js/race-model.js";
 
 // ---------- 手書きの JRA 風 HTML ----------
 const TOP = `<a href="#" onclick="doAction('/JRADB/accessD.html', 'pw01drl10052026050520261115/AB');">5回東京5日<span>土曜</span></a>
@@ -42,6 +42,19 @@ const SCHEDULE = [{ month: "11", data: [
   { date: "17", day: "月", info: [{ race: [], gradeRace: [] }] },
 ] }];
 
+// 結果ページ: 着順・払戻金・この競走の出馬表と、同じ開催の 9R〜11R の結果へのリンク
+const RESULT_TOP = `<a href="/JRADB/accessS.html?CNAME=pw01sde1005202605051120261115/A1">テスト記念</a><a href="/JRADB/accessS.html?CNAME=pw01sde1005202605051120261115/A1">同じ</a>`;
+const RESULT = (rn) => CARD.slice(0, CARD.indexOf("<table")) + `<table><tbody>` +
+  [[1, 2, 2], [2, 1, 1], [3, 3, 3]].map(([place, n, pop]) => `<tr><td class="place">${place}</td><td class="waku"><img src="/waku/${n}.png"></td><td class="num">${n}</td>
+    <td class="horse"><a href="#">ホース${n}</a></td><td class="time">2:00.0</td><td class="margin"> クビ</td><td class="pop">${pop}</td></tr>`).join("") +
+  `<tr><td class="place">除外</td><td class="num">4</td><td class="horse">ホース4</td></tr></tbody></table>
+  <li class="win"><dl><dt>単勝</dt><dd><div class="line"><div class="num">2</div><div class="yen">450<span>円</span></div></div></dd></dl></li>
+  <li class="place"><dl><dd><div class="line"><div class="num">2</div><div class="yen">150</div></div><div class="line"><div class="num">1</div><div class="yen">110</div></div></dd></dl></li>
+  <li class="umaren"><dl><dd><div class="line"><div class="num">1-2</div><div class="yen">1,230</div></div></dd></dl></li>
+  <a href="/JRADB/accessD.html?CNAME=pw01dde100520260505${String(rn).padStart(2, "0")}20261115/C${rn - 8}">出馬表</a>` +
+  ["09", "10", "11"].map(r => `<a href="/JRADB/accessS.html?CNAME=pw01sde100520260505${r}20261115/B${r.slice(1)}">${r}R</a>`).join("") +
+  `<a href="/JRADB/accessS.html?CNAME=pw01sde1008202605050120261115/F0">京都1R</a>`;
+
 // ---------- 解析 ----------
 assert.equal(gradeOf('<img src="icon_grade_lg_g1.png">'), "GI");
 const top = parseTop(TOP);
@@ -61,6 +74,15 @@ assert.deepEqual([a1.num, a1.waku, a1.odds, a1.pop, a1.carry, a1.bodyWeight, a1.
 assert.equal(a2.odds, 4.5, "人気が赤字でない馬のオッズ");
 assert.deepEqual([a1.past[0].place, a1.past[0].field, a1.past[0].distance, a1.past[0].surface, a1.past[0].grade, a1.past[0].diff], [1, 12, 1800, "芝", "GII", -0.2]);
 assert.equal(a3.past.length, 0, "過去走なし");
+assert.deepEqual(parseResultTop(RESULT_TOP), ["pw01sde1005202605051120261115/A1"]);
+const res = parseResult(RESULT(11), "pw01sde1005202605051120261115/A1");
+assert.equal(res.cardCname, "pw01dde1005202605051120261115/C3", "この競走の出馬表");
+assert.deepEqual(res.order.map(o => [o.place, o.num, o.pop, o.status]), [[1, 2, 2, ""], [2, 1, 1, ""], [3, 3, 3, ""], [null, 4, null, "除外"]]);
+assert.deepEqual(res.payouts.win, [{ combo: "2", yen: 450 }]);
+assert.deepEqual(res.payouts.umaren, [{ combo: "1-2", yen: 1230 }], "3 桁区切りのカンマ");
+assert.equal(res.payouts.place.length, 2);
+assert.deepEqual(res.payouts.tierce, [], "載っていない券種は空");
+assert.deepEqual(res.siblings, ["pw01sde1005202605050920261115/B9", "pw01sde1005202605051020261115/B0"], "同じ日・同じ競馬場のレースだけ");
 const days = parseScheduleMonth(SCHEDULE, 2026);
 assert.equal(days[0].date, "2026-11-15");
 assert.deepEqual(days[0].graded, [{ name: "テスト記念", grade: "GII", venue: "東京5日" }, { name: "テスト障害", grade: "J・GI", venue: "京都5日" }]);
@@ -78,10 +100,48 @@ assert(Math.abs(m.probs.reduce((s, v) => s + v, 0) - 1) < 1e-9 && Math.abs(m.tak
 assert.equal(kelly(0.3, 3), 0, "期待値 0.9 は賭けない");
 assert(Math.abs(kelly(0.5, 3) - 0.25 * 0.25) < 1e-12, "f = (pO−1)/(O−1) の 1/4");
 
+// ---------- 馬券の確率 (本物の Zig の WebAssembly を使う) ----------
+const z = (await WebAssembly.instantiate(await readFile(new URL("../src/main/resources/static/wasm/montecarlo.wasm", import.meta.url)))).instance.exports;
+const speeds = [106, 104, 102, 101, 100, 99, 98, 97];
+speeds.forEach((sp, i) => z.set_horse(i, sp, 0.7, [0, 1, 2, 3][i % 4]));
+const n8 = speeds.length;
+z.simulate(n8, 100000, 1.0, 7);
+const ord = simulateOrders(z, n8, 1.0, 20000);
+for (let i = 0; i < n8; i++) {
+  const mc = z.win_rate(i) / 100, p1 = probOf(ord, n8, "win", [i]);
+  assert(Math.abs(mc - p1) < 4 * Math.sqrt(mc * (1 - mc) / 20000) + 0.003, `1 回ずつ走らせた勝率が simulate と一致 (${i}: ${mc} vs ${p1})`);
+}
+assert(Math.abs([...Array(n8).keys()].reduce((s, i) => s + probOf(ord, n8, "place", [i]), 0) - 3) < 1e-9, "複勝は毎回 3 頭当たる");
+assert.equal(hits("umaren", [2, 0], [0, 2, 5], 8), true);
+assert.equal(hits("umatan", [2, 0], [0, 2, 5], 8), false, "馬単は順番どおり");
+assert.equal(hits("wide", [5, 0], [0, 2, 5], 8), true);
+assert.equal(hits("trio", [5, 2, 0], [0, 2, 5], 8), true);
+assert.equal(hits("tierce", [0, 2, 5], [0, 2, 5], 8), true);
+assert.equal(hits("place", [5], [0, 2, 5], 7), false, "7 頭以下の複勝は 2 着まで");
+const qm = [0.4, 0.3, 0.2, 0.1];
+let sU = 0, sT = 0, sW = 0;
+for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { if (i < j) { sU += harville(qm, "umaren", [i, j]); sW += harville(qm, "wide", [i, j]); } for (let k = 0; k < 4; k++) sT += harville(qm, "tierce", [i, j, k]); }
+assert(Math.abs(sU - 1) < 1e-9 && Math.abs(sT - 1) < 1e-9, "Harville の確率は合計 1");
+assert(Math.abs(sW - 3) < 1e-9, "ワイドは毎回 3 組が当たる");
+assert.equal(oddsFrom(0.25, 0.2), 3.2, "(1 − 0.2) ÷ 0.25");
+assert.equal(oddsFrom(0.9, 0.2), 1.0, "最低 1.0 倍 (元返し)");
+assert.equal(BET_TYPES.length, 7);
+const st = strategies(ord, n8, [0, 1, 2, 3], [0.3, 0.2, 0.15, 0.1, 0.09, 0.07, 0.05, 0.04], [2.6, 4, 5.3, 8, 8.9, 11.4, 16, 20]);
+assert.equal(st.length, 7);
+assert(st.every(x => x.hitRate > 0 && x.hitRate <= 1 && x.returnRate > 0), "的中率と回収率");
+assert.equal(st.find(x => x.name.startsWith("単勝")).tickets[0].estimated, false, "単勝は本物のオッズ");
+assert(Math.abs(st[0].returnRate - probOf(ord, n8, "win", [0]) * 2.6) < 1e-9, "回収率 = 的中率 × オッズ (1 点)");
+assert(st.find(x => x.name.startsWith("3連複")).points === 4 && st.find(x => x.name.startsWith("3連単")).points === 6);
+const cm = commentary({ horses: card.runners.map(r => ({ ...r, popularity: r.pop })), f, p: [0.5, 0.3, 0.2], q: [0.5, 0.25, 0.25], pace: paceOf(f.map(v => v.style)), race });
+assert.equal(cm.picks[0].mark, "◎");
+assert(cm.picks[0].reasons[0].includes("前走 GII 1着/12頭"));
+assert(cm.picks[2].reasons.some(t => t.includes("過去の出走がなく")));
+assert(cm.pace.includes("スローペース"));
+
 // ---------- 取得計画 ----------
 const at = (iso) => Date.parse(iso); // JST で書く
 const sat = at("2026-11-15T10:00:00+09:00");
-const fresh = { "sched:202611": sat, "sched:202612": sat, "sched:202701": sat, top: sat };
+const fresh = { "sched:202611": sat, "sched:202612": sat, "sched:202701": sat, top: sat, results_top: sat };
 assert.deepEqual(plan(sat, {}, [], []), { kind: "schedule", month: "202611" });
 assert.deepEqual(plan(sat, { ...fresh, top: sat - 21 * MIN }, [], []), { kind: "top" }, "土曜は 20 分ごと");
 assert.deepEqual(plan(at("2026-11-11T10:00:00+09:00"), { ...fresh, "sched:202611": at("2026-11-11T09:00:00+09:00"), top: at("2026-11-11T06:00:00+09:00") }, [], []).kind, "top");
@@ -112,13 +172,15 @@ globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   requests.push(`${init.method ?? "GET"} ${u.replace("https://www.jra.go.jp", "")}`);
   if (u.includes("/calendar/json/")) return new Response(JSON.stringify(SCHEDULE));
-  if (init.method === "POST") return new Response(toSjis(TOP));
+  if (init.method === "POST") return new Response(toSjis(String(init.body).includes("sli") ? RESULT_TOP : TOP));
+  const sde = /CNAME=(pw01sde100520260505(\d{2})20261115)/.exec(decodeURIComponent(u));
+  if (sde) return new Response(toSjis(RESULT(+sde[2])));
   if (u.includes("pw01drl")) return new Response(toSjis(LIST));
   if (u.includes("pw01dde")) return new Response(toSjis(CARD));
   return new Response("", { status: 404 });
 };
 const db = new DatabaseSync(":memory:");
-for (const f of ["0001_init.sql", "0002_jra.sql"]) db.exec(await readFile(new URL(`./migrations/${f}`, import.meta.url), "utf8"));
+for (const f of ["0001_init.sql", "0002_jra.sql", "0003_results.sql"]) db.exec(await readFile(new URL(`./migrations/${f}`, import.meta.url), "utf8"));
 const stmt = (sql, args = []) => ({
   bind: (...a) => stmt(sql, a),
   all: async () => ({ results: db.prepare(sql).all(...args) }),
@@ -129,18 +191,35 @@ const env = { DB: { prepare: sql => stmt(sql), batch: async (list) => { for (con
 let t = at("2026-11-14T10:00:00+09:00"); // 前日の土曜 → 翌日分を取る
 const kinds = [];
 for (let i = 0; i < 12; i++, t += MIN) kinds.push((await tick(env, t)).kind);
-assert.deepEqual(kinds, ["schedule", "schedule", "schedule", "top", "meeting", "meeting", "card", "card", "idle", "idle", "idle", "idle"]);
-assert(requests.length === 8 && requests.every(r => r.startsWith("GET /") || r === "POST /JRADB/accessD.html"), "1 分に 1 件まで");
+assert.deepEqual(kinds, ["schedule", "schedule", "schedule", "top", "meeting", "meeting", "card", "card", "results_top", "idle", "idle", "idle"], "結果は終わったレースだけ");
+assert(requests.length === 9 && requests.every(r => r.startsWith("GET /") || r.startsWith("POST /")), "1 分に 1 件まで");
 const row = db.prepare("SELECT * FROM jra_races WHERE id = '20261115-05-11'").get();
 assert.equal(JSON.parse(row.card).runners.length, 3);
 
 // 失敗しても止まらず、記録して次へ進む
+const goodFetch = globalThis.fetch;
 globalThis.fetch = async () => new Response("", { status: 503 });
 t += 3 * HOUR;
 assert.equal((await tick(env, t)).kind, "top");
 assert.match(db.prepare("SELECT value FROM jra_state WHERE key = 'last_error'").get().value, /HTTP 503/);
 assert.notEqual((await tick(env, t + MIN)).kind, "top", "失敗したものを毎分取り直さない (後ろの取得が止まらない)");
 assert.equal(JSON.parse(db.prepare("SELECT card FROM jra_races WHERE id = '20261115-05-11'").get().card).runners.length, 3, "保存済みの出馬表は消えない");
+
+// レースが終わったら結果を集める (17 時以降)。今週取り込んだ出馬表があればそれを使い、なければ取りに行く
+globalThis.fetch = goodFetch;
+t = at("2026-11-15T18:00:00+09:00");
+const later = [];
+for (let i = 0; i < 30; i++, t += MIN) {
+  const k = (await tick(env, t)).kind;
+  if (k === "idle") break;
+  later.push(k);
+}
+assert.deepEqual(later.filter(k => k.startsWith("result")), ["results_top", "result", "result", "result", "result_card"], "11R → 同じ日の 9R・10R、出馬表は 9R だけ取りに行く");
+const stored = db.prepare("SELECT id, result, card FROM jra_results ORDER BY id").all();
+assert.deepEqual(stored.map(r => r.id), ["20261115-05-09", "20261115-05-10", "20261115-05-11"]);
+assert(stored.every(r => r.result && r.card), "結果と出馬表がそろう");
+assert.equal(JSON.parse(stored[2].card).runners[0].jockey, undefined, "出馬表は必要な項目だけに絞る");
+assert.equal(JSON.parse(stored[2].card).runners[0].past[0].place, 1);
 
 // ---------- 画面用 API ----------
 const call = async (pq) => {
@@ -163,6 +242,10 @@ try {
   r = await call("/api/live/schedule");
   assert.deepEqual(r.body.map(d => [d.date, d.hasRaces]), [["2026-11-15", true], ["2026-11-16", false]], "開催のない日は出さない");
   assert((await call("/api/live/status")).body.last_tick);
+  r = await call("/api/live/results");
+  assert.equal(r.body.length, 3);
+  assert.equal(r.body[0].venueName, "東京");
+  assert.deepEqual(r.body.find(x => x.id === "20261115-05-11").result.payouts.win, [{ combo: "2", yen: 450 }]);
 } finally {
   Date.now = realNow;
 }

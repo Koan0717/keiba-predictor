@@ -28,7 +28,7 @@ import {
   seeded,
   setTokenProvider,
 } from "./util.js";
-import { features, paceOf, marketProbs, kelly, coatName } from "./race-model.js";
+import { marketProbs, kelly, coatName, simulateOrders, strategies, commentary, BET, BET_TYPES, hits, probOf, oddsFrom, modelProbs, planTickets, payoutOf } from "./race-model.js";
 
 // Firebase の Web SDK (公式 CDN)。/api/config に設定がある環境 (Cloudflare Pages 版) だけで読み込む
 const FIREBASE_SDK = "https://www.gstatic.com/firebasejs/13.2.0/";
@@ -842,13 +842,58 @@ async function loadLiveRace(id, quiet = false) {
     $("#mc-meta").textContent = "";
     $("#bets").innerHTML = "";
     $("#entry-table").innerHTML = "";
+    $("#outlook").hidden = true;
     return;
   }
   $$("#mc-pace button").forEach((x) => x.classList.toggle("on", +x.dataset.pace === a.paceValue));
   state.mcPace = a.paceValue;
   renderLiveBets(a);
+  renderOutlook(a);
   renderMonteCarlo();
   renderEntries();
+}
+
+// 予想の見解: 印の馬を推す理由 (特徴量と市場との比較から自動で作る文章) と、7 つの買い方の的中率・回収率。
+const MARK_CLASS = { "◎": "m1", "◯": "m2", "▲": "m3", "△": "m4" };
+function renderOutlook(a) {
+  const box = $("#outlook");
+  box.hidden = !a?.live || !a.orders;
+  if (box.hidden) return;
+  const H = a.race.horses;
+  const p = a.predictions.map((x) => x.winProbability / 100);
+  const cm = commentary({ horses: H, f: a.f, p, q: a.market, pace: { value: a.paceValue, name: a.paceForecast }, race: a.cond });
+  $("#outlook-meta").textContent = a.done ? "発走済み (振り返り)" : "";
+  $("#outlook-pace").textContent = cm.pace;
+  $("#outlook-picks").innerHTML = cm.picks
+    .map(({ index, mark, reasons }) => {
+      const h = H[index];
+      return `<div class="pick"><span class="mark ${MARK_CLASS[mark]}">${mark}</span>${wakuBadge(h.horseNumber, h.postPosition)}<b>${esc(h.name)}</b><span class="muted num">${h.odds ? `${h.odds}倍・${h.popularity}番人気` : ""}</span>
+        <ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>`;
+    })
+    .join("");
+  $("#outlook-danger").innerHTML = cm.danger.length
+    ? `<p class="note warn">${icon("info")}<span><b>危険な人気馬</b> ${cm.danger.map((d) => `${esc(H[d.index].name)}: ${esc(d.text)}`).join(" / ")}</span></p>`
+    : "";
+  const order = p.map((_, i) => i).sort((i, j) => p[j] - p[i]);
+  const plans = strategies(a.orders, H.length, order, a.market, H.map((h) => h.odds || 0));
+  const num = (i) => H[i].horseNumber;
+  const combo = (t) => t.picks.map(num).join(BET[t.type].ordered ? "→" : "-");
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  const best = plans.filter((x) => x.returnRate > 1).sort((x, y) => y.returnRate - x.returnRate)[0];
+  const safest = [...plans].sort((x, y) => y.hitRate - x.hitRate)[0];
+  $("#plan-verdict").innerHTML = !a.hasOdds
+    ? "オッズの発表前なので、的中率だけを表示しています。"
+    : best
+      ? `${icon("lightbulb")}<span>おすすめは <b>${esc(best.name)}</b> (${best.points}点・的中率 ${pct(best.hitRate)}・回収率 ${pct(best.returnRate)})。</span>`
+      : `${icon("lightbulb")}<span>どの買い方も回収率が 100% を下回るので、<b>見送り</b> が予想上の最善です。楽しむなら的中率の高い <b>${esc(safest.name)}</b> (的中率 ${pct(safest.hitRate)}) が損をしにくい買い方です。</span>`;
+  $("#plan-table").innerHTML = `<thead><tr><th>買い方</th><th>タイプ</th><th>点数</th><th>買い目</th><th>的中率</th><th>回収率</th></tr></thead><tbody>${plans
+    .map(
+      (x) => `<tr class="${x === best ? "best" : ""}"><td><b>${esc(x.name)}</b></td><td>${esc(x.style)}</td><td class="num">${x.points}</td>
+      <td class="num combos">${x.tickets.map((t) => `${combo(t)}<small>${a.hasOdds ? ` ${t.odds}倍${t.estimated ? "*" : ""}` : ""}</small>`).join("<br>")}</td>
+      <td class="num">${pct(x.hitRate)}<div class="bar"><i style="width:${x.hitRate * 100}%"></i></div></td>
+      <td class="num ${a.hasOdds && x.returnRate > 1 ? "plus" : ""}">${a.hasOdds ? pct(x.returnRate) : "-"}</td></tr>`,
+    )
+    .join("")}</tbody>`;
 }
 
 // 出馬表 → サンプルと同じ形の「分析」 (renderMonteCarlo / renderEntries / raceToSim がそのまま使える)。
@@ -856,8 +901,8 @@ async function loadLiveRace(id, quiet = false) {
 function liveAnalysis(r, runners) {
   const hd = r.card.header;
   const cond = { surface: hd.surface || r.surface, distance: hd.distance || r.distance };
-  const f = runners.map((x) => features(x, cond));
-  const pace = paceOf(f.map((v) => v.style));
+  const z = state.engines.zig;
+  const { f, pace, p: winP } = modelProbs(z, runners, cond);
   const horses = runners.map((x, i) => ({
     horseNumber: x.num,
     postPosition: x.waku,
@@ -875,14 +920,11 @@ function liveAnalysis(r, runners) {
     speedIndex: Math.round(f[i].mu * 1000) / 10,
     runningStyle: Object.keys(STYLE_CODE)[f[i].style],
     coat: coatName(x.color),
+    past: x.past,
   }));
-  const z = state.engines.zig;
-  let win;
-  if (z) {
-    horses.slice(0, 18).forEach((h, i) => z.set_horse(i, h.speedIndex, 0.7, STYLE_CODE[h.runningStyle]));
-    z.simulate(Math.min(18, horses.length), 100000, pace.value, 20261109);
-    win = horses.map((_, i) => (i < 18 ? z.win_rate(i) : 0));
-  } else win = f.map(() => 100 / horses.length); // Zig が読めないときは全馬同じ
+  const win = winP.map((v) => v * 100);
+  // 組み合わせ馬券 (馬連・3連単など) の確率用に、毎回の 1〜3 着も記録する (2 万回)
+  const orders = z ? simulateOrders(z, Math.min(18, horses.length), pace.value, 20000) : null;
   const max = Math.max(...win, 1e-9);
   const order = win.map((w, i) => i).sort((i, j) => win[j] - win[i]);
   const marks = ["◎", "◯", "▲", "△", "△"];
@@ -895,6 +937,9 @@ function liveAnalysis(r, runners) {
   const market = marketProbs(horses.map((h) => h.odds || 0));
   return {
     live: true,
+    orders,
+    f,
+    cond,
     hasOdds: horses.some((h) => h.odds),
     takeout: market.takeout,
     market: market.probs,
@@ -998,6 +1043,7 @@ const TRAINING = { S: 1.0, "A+": 0.9, A: 0.8, B: 0.65, C: 0.5 };
 
 async function loadRace(id) {
   const a = (state.race = await api(`/api/races/${id}/analysis`));
+  $("#outlook").hidden = true; // 見解は JRA の実際のレースだけ
   const r = a.race,
     w = r.weather;
   $("#race-hero").innerHTML = `<div>
@@ -1147,6 +1193,173 @@ async function raceToSim() {
 const a2pace = (s) =>
   s === "ハイペース" ? "1.2" : s === "スローペース" ? "0.8" : "1.0";
 
+// はじめての競馬 (チュートリアル)。中身は learn.js
+init.learn = () => import("./learn.js").then((m) => m.renderLearn());
+
+/* ============================================================
+   予想の成績 (過去のレースで、予想モデルがどれだけ当たったか)
+   ============================================================ */
+// Worker が集めた過去のレース (結果 + レース前の出馬表) を、レース予想と同じモデルで予想し直し、
+// 実際の着順・払戻金と比べる。予想に使うのは発走前に分かる情報 (確定オッズと過去 4 走) だけ。
+const SERIES = [
+  { key: "honmei", name: "◎の単勝", cls: "s1" },
+  { key: "app", name: "アプリの買い目", cls: "s2" },
+  { key: "fav", name: "1番人気の単勝", cls: "s3" },
+];
+init.results = async () => {
+  const data = await api("/api/live/results").catch(() => null);
+  if (!data) {
+    $("#res-stats").innerHTML = `<p class="muted">この環境では表示できません (Cloudflare 版のデータが必要です)。</p>`;
+    return;
+  }
+  if (!data.length) {
+    $("#res-stats").innerHTML = `<p class="muted">答え合わせ用の過去のレースを、JRA 公式サイトから自動で集めています。1 分に 1 件ずつなので、最初の結果が出るまで数十分かかります。</p>`;
+    return;
+  }
+  $("#res-stats").innerHTML = `<p class="muted">${data.length} レースを予想し直しています</p>`;
+  const z = state.engines.zig;
+  const rows = [];
+  for (let k = 0; k < data.length; k++) {
+    const e = evalRace(z, data[k]);
+    if (e) rows.push(e);
+    if (k % 20 === 19) await new Promise((r) => setTimeout(r)); // 画面を固めない
+  }
+  rows.sort((a, b) => a.r.date.localeCompare(b.r.date) || a.r.id.localeCompare(b.r.id));
+  state.resRows = rows;
+  renderResults();
+  $$("#res-filter button").forEach((b) =>
+    b.addEventListener("click", () => {
+      $$("#res-filter button").forEach((x) => x.classList.toggle("on", x === b));
+      renderResTable(b.dataset.f);
+    }),
+  );
+};
+
+function evalRace(z, r) {
+  const { result: res, card } = r;
+  const out = new Set(res.order.filter((o) => /取消|除外/.test(o.status)).map((o) => o.num));
+  const runners = card.runners.filter((x) => !x.scratched && x.num && !out.has(x.num));
+  if (runners.length < 4 || !res.payouts?.win?.length) return null;
+  const cond = { surface: card.header.surface, distance: card.header.distance };
+  const { p } = modelProbs(z, runners, cond, 20000);
+  const order = p.map((_, i) => i).sort((i, j) => p[j] - p[i]);
+  const num = (i) => runners[i].num;
+  const placeOf = new Map(res.order.map((o) => [o.num, o.place]));
+  const odds = runners.map((x) => x.odds || 0);
+  const fav = odds.reduce((b, o, i) => (o && (b < 0 || o < odds[b]) ? i : b), -1);
+  const q = marketProbs(odds).probs;
+  const win = (i) => (i >= 0 ? payoutOf(res.payouts, "win", [num(i)]) : 0);
+  const plans = planTickets(order).map((pl) => ({
+    name: pl.name,
+    cost: pl.tickets.length * 100,
+    back: pl.tickets.reduce((s, [type, picks]) => s + payoutOf(res.payouts, type, picks.map(num)), 0),
+  }));
+  const evPicks = runners.map((_, i) => i).filter((i) => odds[i] && kelly(p[i], odds[i]) > 0);
+  plans.push({ name: "アプリの買い目 (期待値 1 超えの単勝)", cost: evPicks.length * 100, back: evPicks.reduce((s, i) => s + win(i), 0) });
+  plans.push({ name: "1番人気の単勝 (比較用)", cost: fav >= 0 ? 100 : 0, back: win(fav) });
+  const w = runners.findIndex((x) => placeOf.get(x.num) === 1);
+  const ll = (v) => -Math.log(Math.max(v, 1e-4));
+  return {
+    r, runners, order, p, placeOf, fav, plans,
+    profit: { honmei: plans[0].back - plans[0].cost, app: plans.at(-2).back - plans.at(-2).cost, fav: plans.at(-1).back - plans.at(-1).cost },
+    winner: w, llModel: w >= 0 ? ll(p[w]) : null, llMarket: w >= 0 ? ll(q[w]) : null,
+  };
+}
+
+function renderResults() {
+  const rows = state.resRows;
+  const n = rows.length;
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  const rate = (f) => rows.filter(f).length / n;
+  const at = (e, i) => (i >= 0 ? e.placeOf.get(e.runners[i].num) : null);
+  const ll = rows.filter((e) => e.llModel != null);
+  const mean = (k) => ll.reduce((s, e) => s + e[k], 0) / Math.max(1, ll.length);
+  const tile = (label, value, sub) => `<div class="stat card"><span class="label">${label}</span><b class="num">${value}</b><span class="fine">${sub}</span></div>`;
+  $("#res-stats").innerHTML = [
+    tile("検証したレース", `${n}`, `${esc(rows[0].r.date)} 〜 ${esc(rows[n - 1].r.date)}`),
+    tile("◎ の勝率", pct(rate((e) => at(e, e.order[0]) === 1)), `1番人気は ${pct(rate((e) => at(e, e.fav) === 1))}`),
+    tile("◎ の 3 着以内率", pct(rate((e) => (at(e, e.order[0]) ?? 99) <= 3)), `1番人気は ${pct(rate((e) => (at(e, e.fav) ?? 99) <= 3))}`),
+    tile("予想の精度 (対数損失)", mean("llModel").toFixed(3), `市場 (オッズ) は ${mean("llMarket").toFixed(3)}。小さいほど正確`),
+  ].join("");
+  $("#res-count").textContent = `${n} レース`;
+  // 買い方ごとの合計
+  const names = rows[0].plans.map((x) => x.name);
+  const sums = names.map((name, k) => {
+    const list = rows.map((e) => e.plans[k]).filter((x) => x.cost);
+    const cost = list.reduce((s, x) => s + x.cost, 0), back = list.reduce((s, x) => s + x.back, 0);
+    return { name, races: list.length, hit: list.filter((x) => x.back > 0).length, cost, back };
+  });
+  $("#res-plans").innerHTML = `<thead><tr><th>買い方</th><th>買ったレース</th><th>的中率</th><th>投資</th><th>払戻</th><th>回収率</th></tr></thead><tbody>${sums
+    .map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.races}</td><td class="num">${x.races ? pct(x.hit / x.races) : "-"}</td>
+      <td class="num">${yen(x.cost)}</td><td class="num">${yen(x.back)}</td><td class="num ${x.back > x.cost ? "plus" : "minus"}">${x.cost ? `${((x.back / x.cost) * 100).toFixed(0)}%` : "-"}</td></tr>`)
+    .join("")}</tbody>`;
+  renderResChart(rows);
+  renderResTable("all");
+}
+
+// 累積収支の折れ線 (3 本)。凡例と線の端のラベルで見分けられるようにし、ホバーで各レースの値を出す。
+function renderResChart(rows) {
+  const W = 760, H = 240, L = 56, R = 120, T = 14, B = 26;
+  const cum = SERIES.map((s) => {
+    let v = 0;
+    return [0, ...rows.map((e) => (v += e.profit[s.key]))];
+  });
+  const all = cum.flat();
+  const lo = Math.min(0, ...all), hi = Math.max(0, ...all);
+  const x = (i) => L + (i / Math.max(1, rows.length)) * (W - L - R);
+  const y = (v) => T + (1 - (v - lo) / Math.max(1, hi - lo)) * (H - T - B);
+  const ticks = [lo, 0, hi].filter((v, i, a) => a.indexOf(v) === i);
+  const fmt = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v)).toLocaleString()}円`;
+  // 線の端のラベルが重ならないよう、近すぎるものは縦にずらす
+  const ends = cum.map((c, k) => ({ k, y: y(c.at(-1)) })).sort((a, b) => a.y - b.y);
+  ends.forEach((e, i) => { if (i && e.y - ends[i - 1].y < 14) e.y = ends[i - 1].y + 14; });
+  $("#res-chart").innerHTML = `<div class="legend">${SERIES.map((s) => `<span><i class="sw ${s.cls}"></i>${s.name}</span>`).join("")}</div>
+    <div class="chart-box"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="累積収支の推移 (1 レース 100 円ずつ)">
+      ${ticks.map((v) => `<line class="${v === 0 ? "zero" : "grid"}" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join("")}
+      ${cum.map((c, k) => `<polyline class="line ${SERIES[k].cls}" points="${c.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>`).join("")}
+      ${ends.map((e) => `<text class="end" x="${W - R + 6}" y="${e.y + 4}">${SERIES[e.k].name} ${fmt(cum[e.k].at(-1))}</text>`).join("")}
+      <line class="cross" id="res-cross" y1="${T}" y2="${H - B}" visibility="hidden"/>
+      <rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}"/>
+    </svg><div class="tip" id="res-tip" hidden></div></div>`;
+  const svg = $("#res-chart svg"), tip = $("#res-tip"), cross = $("#res-cross");
+  const move = (ev) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((ev.clientX - box.left) / box.width) * W;
+    const i = Math.max(1, Math.min(rows.length, Math.round(((px - L) / (W - L - R)) * rows.length)));
+    const e = rows[i - 1];
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    tip.innerHTML = `<b>${esc(e.r.date)} ${esc(e.r.venueName)}${e.r.race_no}R ${esc(e.r.name)}</b>${SERIES.map((s, k) => `<span><i class="sw ${s.cls}"></i>${s.name} <b class="num">${fmt(cum[k][i])}</b></span>`).join("")}`;
+    const left = (x(i) / W) * box.width;
+    tip.style.left = `${Math.min(left + 12, box.width - tip.offsetWidth - 4)}px`;
+  };
+  svg.addEventListener("pointermove", move);
+  svg.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+}
+
+function renderResTable(filter) {
+  const rows = [...state.resRows].reverse().filter((e) =>
+    filter === "graded" ? /G/.test(e.r.grade) : filter === "hit" ? (e.placeOf.get(e.runners[e.order[0]].num) ?? 99) <= 3 : true,
+  );
+  const cell = (e, i, mark) => {
+    if (i == null || i < 0) return "-";
+    const h = e.runners[i], pl = e.placeOf.get(h.num);
+    return `${mark ? `<span class="mark ${MARK_CLASS[mark]}">${mark}</span>` : ""}${esc(h.name)}<span class="sub">${h.pop ?? "-"}番人気 → <b class="${pl && pl <= 3 ? "plus" : ""}">${pl ? `${pl}着` : "-"}</b></span>`;
+  };
+  const money = (v) => `<span class="${v > 0 ? "plus" : v < 0 ? "minus" : ""}">${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toLocaleString()}</span>`;
+  $("#res-table").innerHTML = `<thead><tr><th>日付</th><th>レース</th><th>◎</th><th>◯</th><th>1番人気</th><th>勝ち馬</th><th>単勝</th><th>◎の単勝</th><th>アプリの買い目</th></tr></thead><tbody>${rows
+    .slice(0, 300)
+    .map((e) => {
+      const wi = e.winner;
+      return `<tr><td class="num">${esc(e.r.date.slice(5).replace("-", "/"))}</td><td>${gradeBadge(e.r.grade)} ${esc(e.r.venueName)}${e.r.race_no}R<span class="sub">${esc(e.r.name)}</span></td>
+      <td>${cell(e, e.order[0], "◎")}</td><td>${cell(e, e.order[1], "◯")}</td><td>${cell(e, e.fav)}</td>
+      <td>${wi >= 0 ? `${esc(e.runners[wi].name)}<span class="sub">${e.runners[wi].pop ?? "-"}番人気</span>` : "-"}</td>
+      <td class="num">${(e.r.result.payouts.win[0]?.yen ?? 0).toLocaleString()}円</td>
+      <td class="num">${money(e.profit.honmei)}</td><td class="num">${e.plans.at(-2).cost ? money(e.profit.app) : `<span class="muted">見送り</span>`}</td></tr>`;
+    })
+    .join("") || `<tr><td colspan="9" class="muted">該当するレースがありません</td></tr>`}</tbody>`;
+}
+
 /* ============================================================
    3D シミュレーション
    ============================================================ */
@@ -1253,6 +1466,7 @@ function effectiveSpeed(f, distance, surface) {
 // prepareToken: 3D の準備を待っている間に次の変更が来たら、古いほうの処理は途中で捨てる。
 // Zig が読み込めなかったときは、JS の乱数で代わりの「出来」を作る。
 let prepareToken = 0;
+let gameOrders = null;
 async function prepareSim() {
   if (!state.sim) return;
   const token = ++prepareToken;
@@ -1282,6 +1496,8 @@ async function prepareSim() {
     );
     z.race_once(n, pace, seed);
     scores = state.field.map((_, i) => z.race_score(i));
+    // 予想ゲームのオッズ用に、同じ条件で 2 万回走らせた 1〜3 着を記録 (上の 1 回分の結果とは別の乱数)
+    gameOrders = simulateOrders(z, n, pace, 20000, (seed ^ 0x5bd1e995) >>> 0);
   } else {
     const rnd = seeded(seed);
     scores = state.field.map(
@@ -1300,6 +1516,7 @@ async function prepareSim() {
     };
   });
   state.sim.setup({ course, distance, surface, field, scores });
+  gamePrepared(z ? gameOrders : null);
   state.lastSim = {
     courseId: course.id,
     course: course.short,
@@ -1315,6 +1532,161 @@ async function prepareSim() {
     remain: course.category === "ばんえい" ? 200 : distance,
     t: 0,
   });
+}
+
+/* ---------- 予想ゲーム (仮想のお金で馬券を買い、3D のレース結果で払い戻す) ---------- */
+// 所持金と通算成績はこのブラウザの中だけに保存する (localStorage。使えない環境ではページを閉じるまで)。
+const GAME_KEY = "kv-game";
+const game = { wallet: 10000, races: 0, spent: 0, back: 0, best: 0, type: "win", sel: [], slip: [], orders: null, n: 0, locked: false };
+try {
+  Object.assign(game, JSON.parse(localStorage.getItem(GAME_KEY) || "{}"));
+} catch {}
+game.slip = [];
+game.sel = [];
+const saveGame = () => {
+  try {
+    // まだ結果の出ていない馬券の代金は、所持金に戻した額で保存する (途中でページを閉じても失わないように)
+    const { races, spent, back, best } = game;
+    const wallet = game.wallet + game.slip.reduce((s, t) => s + t.amount, 0);
+    localStorage.setItem(GAME_KEY, JSON.stringify({ wallet, races, spent, back, best }));
+  } catch {}
+};
+const yen = (v) => `${Math.round(v).toLocaleString()}円`;
+
+function setupGame() {
+  $("#bet-type").innerHTML = BET_TYPES.map((b) => `<button type="button" data-type="${b.key}" class="${b.key === game.type ? "on" : ""}">${b.name}</button>`).join("");
+  $$("#bet-type button").forEach((b) =>
+    b.addEventListener("click", () => {
+      $$("#bet-type button").forEach((x) => x.classList.toggle("on", x === b));
+      game.type = b.dataset.type;
+      game.sel = [];
+      renderGame();
+    }),
+  );
+  $("#bet-add").addEventListener("click", buyTicket);
+  $("#bet-amount").addEventListener("input", renderGame);
+  renderGame();
+}
+
+// 出走表や条件が変わってレースが組み直されたら、オッズが変わるので、まだ走っていない馬券は取り消して返金する
+function gamePrepared(orders) {
+  if (game.slip.length) {
+    game.wallet += game.slip.reduce((s, t) => s + t.amount, 0);
+    game.slip = [];
+    saveGame();
+    toast("条件が変わったので、買った馬券を取り消して返金しました");
+  }
+  game.orders = orders;
+  game.n = state.field.length;
+  game.sel = game.sel.filter((i) => i < game.n);
+  lockGame(false);
+}
+
+function lockGame(on) {
+  game.locked = on;
+  $("#game")?.classList.toggle("locked", on);
+  renderGame();
+}
+
+const gameOdds = (type, picks) => oddsFrom(probOf(game.orders, game.n, type, picks), BET[type].takeout);
+
+function renderGame() {
+  if (!$("#game")) return;
+  const bt = BET[game.type];
+  $("#game-wallet").textContent = `所持金 ${yen(game.wallet)}`;
+  $("#bet-rule").textContent = `${bt.name}: ${bt.rule}${bt.ordered ? "。1着から順に選んでください" : ""}`;
+  const ready = !!game.orders && !game.locked && game.n === state.field.length;
+  // 馬のボタン (単勝オッズと、モデルの印を添える)
+  const win = ready ? state.field.map((_, i) => probOf(game.orders, game.n, "win", [i])) : [];
+  const rank = win.map((_, i) => i).sort((i, j) => win[j] - win[i]);
+  const marks = ["◎", "◯", "▲"];
+  $("#bet-horses").innerHTML = state.field
+    .map((f, i) => {
+      const k = game.sel.indexOf(i);
+      const m = marks[rank.indexOf(i)];
+      return `<button type="button" data-i="${i}" class="${k >= 0 ? "on" : ""}" ${ready ? "" : "disabled"} aria-pressed="${k >= 0}">
+        ${wakuBadge(i + 1, wakuOf(i + 1, game.n))}<span class="nm">${esc(f.name)}</span>
+        <span class="od num">${ready ? `${gameOdds("win", [i])}倍` : ""}</span>${m ? `<span class="mk ${MARK_CLASS[m]}" title="モデルの印">${m}</span>` : ""}
+        ${k >= 0 && bt.ordered ? `<span class="ord">${k + 1}着</span>` : ""}</button>`;
+    })
+    .join("");
+  $$("#bet-horses button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const i = +b.dataset.i;
+      const k = game.sel.indexOf(i);
+      if (k >= 0) game.sel.splice(k, 1);
+      else if (game.sel.length < bt.picks) game.sel.push(i);
+      else game.sel = [...game.sel.slice(1), i]; // いっぱいなら古い選択を外す
+      renderGame();
+    }),
+  );
+  const full = game.sel.length === bt.picks;
+  const amount = Math.floor((+$("#bet-amount").value || 0) / 100) * 100;
+  $("#bet-pick").innerHTML = full
+    ? `<b>${bt.name} ${game.sel.map((i) => i + 1).join(bt.ordered ? " → " : " - ")}</b> <span class="num">${gameOdds(game.type, game.sel)}倍</span>`
+    : `あと ${bt.picks - game.sel.length} 頭選んでください`;
+  $("#bet-add").disabled = !ready || !full || amount < 100 || amount > game.wallet;
+  $("#bet-slip").innerHTML = game.slip
+    .map(
+      (t, k) => `<li><span>${BET[t.type].name} ${t.picks.map((i) => i + 1).join(BET[t.type].ordered ? "→" : "-")}</span>
+      <span class="num">${t.odds}倍 × ${yen(t.amount)}</span>${game.locked ? "" : `<button type="button" data-rm="${k}" aria-label="取り消す">${icon("x")}</button>`}</li>`,
+    )
+    .join("");
+  $$("#bet-slip [data-rm]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const [t] = game.slip.splice(+b.dataset.rm, 1);
+      game.wallet += t.amount;
+      saveGame();
+      renderGame();
+    }),
+  );
+}
+
+function buyTicket() {
+  const bt = BET[game.type];
+  const amount = Math.floor((+$("#bet-amount").value || 0) / 100) * 100;
+  if (game.locked || !game.orders || game.sel.length !== bt.picks || amount < 100 || amount > game.wallet) return;
+  game.slip.push({ type: game.type, picks: [...game.sel], amount, odds: gameOdds(game.type, game.sel) });
+  game.wallet -= amount;
+  game.sel = [];
+  saveGame();
+  renderGame();
+  toast(`${bt.name}を ${yen(amount)} 買いました`);
+}
+
+// ゴールしたら払い戻す (払戻 = 金額 × オッズ。JRA と同じく 10 円未満は切り捨て)。結果の欄に追加する HTML を返す
+function settleGame(results) {
+  if (!game.slip.length) return `<p class="fine game-hint">${icon("ticket")}スタート前に右の「予想ゲーム」で馬券を買うと、当たったかどうかと払戻がここに出ます。</p>`;
+  const top3 = results.slice(0, 3).map((r) => r.index);
+  let spent = 0, back = 0;
+  const rows = game.slip.map((t) => {
+    const hit = hits(t.type, t.picks, top3, game.n);
+    const pay = hit ? Math.floor((t.amount * t.odds) / 10) * 10 : 0;
+    spent += t.amount;
+    back += pay;
+    return `<li class="${hit ? "hit" : ""}">${icon(hit ? "circle-check" : "circle-x")}<span>${BET[t.type].name} ${t.picks.map((i) => i + 1).join(BET[t.type].ordered ? "→" : "-")}</span><span class="num">${hit ? `+${yen(pay)}` : `−${yen(t.amount)}`}</span></li>`;
+  });
+  game.wallet += back;
+  game.races += 1;
+  game.spent += spent;
+  game.back += back;
+  game.best = Math.max(game.best, back);
+  game.slip = [];
+  saveGame();
+  lockGame(false);
+  const diff = back - spent;
+  return `<div class="game-result"><h3>${back ? "的中!" : "はずれ"}</h3><ul class="game-tickets">${rows.join("")}</ul>
+    <p class="num"><b class="${diff >= 0 ? "plus" : "minus"}">収支 ${diff >= 0 ? "+" : "−"}${yen(Math.abs(diff))}</b> ・ 所持金 ${yen(game.wallet)}</p>
+    <p class="fine">通算 ${game.races} レース ・ 回収率 ${game.spent ? ((game.back / game.spent) * 100).toFixed(0) : 0}% ・ 最高払戻 ${yen(game.best)}</p>
+    ${game.wallet < 100 ? `<button class="btn ghost small" id="game-reset" type="button">${icon("refresh-cw")}所持金を 10,000円 に戻す</button>` : ""}</div>`;
+}
+
+function resetWallet() {
+  Object.assign(game, { wallet: 10000, races: 0, spent: 0, back: 0, best: 0 });
+  saveGame();
+  renderGame();
+  $("#game-reset")?.remove();
+  toast("所持金を 10,000円 に戻しました");
 }
 
 // 左上の順位表 (HUD)。毎フレーム HTML を作り直すと重いので、0.12 秒に 1 回だけ更新する
@@ -1344,14 +1716,18 @@ function showResult(results) {
   $("#sim-result").innerHTML =
     `<h3>結果</h3><ol class="result-list">${results.map((r, k) => `<li><span class="pos">${k + 1}</span>${wakuBadge(r.num, r.waku)}<span>${esc(r.name)}</span><span class="gap">${k === 0 ? `${Math.floor(r.time / 60)}:${(r.time % 60).toFixed(1).padStart(4, "0")}` : esc(r.margin)}</span></li>`).join("")}</ol>
     <div class="btn-row"><button class="btn primary small" id="sim-again" type="button">${icon("refresh-cw")}もう一度 (別の展開)</button><button class="btn ghost small" id="sim-replay" type="button">${icon("rotate-ccw")}リプレイ</button></div>`;
+  $("#sim-result").insertAdjacentHTML("beforeend", settleGame(results));
   $("#sim-result").hidden = false;
+  $("#game-reset")?.addEventListener("click", resetWallet);
   $("#sim-again").onclick = async () => {
     await prepareSim();
+    $("#sim-result").hidden = true;
+    lockGame(true);
     state.sim.start();
   };
   $("#sim-replay").onclick = () => {
     $("#sim-result").hidden = true;
-    state.sim.start();
+    state.sim.start(); // リプレイは同じ結果なので、馬券は買えない (払戻も済んでいる)
   };
 }
 
@@ -1386,8 +1762,10 @@ init.sim = async () => {
   });
   $("#sim-start").addEventListener("click", () => {
     $("#sim-result").hidden = true;
+    lockGame(true);
     state.sim.start();
   });
+  setupGame();
   $("#sim-clear").addEventListener("click", () => {
     state.field = [];
     renderField();

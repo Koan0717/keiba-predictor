@@ -34,9 +34,9 @@ export function gradeOf(html: string): string {
   return ({ g1: "GI", g2: "GII", g3: "GIII", jg1: "J・GI", jg2: "J・GII", jg3: "J・GIII", listed: "L" } as Record<string, string>)[g] ?? "";
 }
 
-/** 出馬表のコード → レースの ID などに分解。ID は「日付-競馬場-レース番号」(例 20261108-05-11) */
+/** 出馬表 (または結果) のコード → レースの ID などに分解。ID は「日付-競馬場-レース番号」(例 20261108-05-11) */
 export function parseRaceCname(cname: string) {
-  const m = /^pw01dde10(\d{2})(\d{4})(\d{2})(\d{2})(\d{2})(\d{8})\//.exec(cname);
+  const m = /^pw01[ds]de10(\d{2})(\d{4})(\d{2})(\d{2})(\d{2})(\d{8})\//.exec(cname); // dde = 出馬表、sde = 結果
   if (!m) return null;
   const [, venue, year, kai, day, race, date] = m;
   return { id: `${date}-${venue}-${race}`, venue, year, kai: +kai, day: +day, raceNo: +race, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}` };
@@ -194,4 +194,68 @@ export function parseScheduleMonth(json: any, year: number): ScheduleDay[] {
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ---------------- レース結果 (予想の答え合わせ用) ----------------
+//   結果一覧   pw01sli00/AF (POST)                       → 最近 2 か月ほどの重賞の結果 (pw01sde...) の一覧
+//   結果       pw01sde10 VV YYYY KK DD RR YYYYMMDD /XX  → 着順・払戻金。同じ日・同じ開催の全レースの結果と、
+//                                                         そのレースの出馬表 (pw01dde...、確定オッズと過去 4 走) へのリンクを含む
+
+/** 結果一覧 → 結果ページのコード */
+export function parseResultTop(html: string): string[] {
+  return [...new Set([...html.matchAll(/(pw01sde10\d{20}\/[0-9A-F]{2})/g)].map(m => m[1]))];
+}
+
+export type Payout = { combo: string; yen: number };
+export type RaceResult = {
+  cardCname: string | null;
+  order: { place: number | null; status: string; num: number | null; name: string; pop: number | null; time: string; margin: string }[];
+  payouts: Record<string, Payout[]>;
+  siblings: string[];
+};
+// 払戻金の券種 (ページの class 名 → アプリでの呼び名)
+export const BET_KEYS = ["win", "place", "wakuren", "wide", "umaren", "umatan", "trio", "tierce"] as const;
+
+/** 結果ページ → 着順・払戻金・出馬表へのリンク・同じ開催の他のレース */
+export function parseResult(html: string, cname: string): RaceResult {
+  const self = parseRaceCname(cname);
+  const order: RaceResult["order"] = [];
+  for (const row of html.split(/<tr[\s>]/).slice(1)) {
+    const place = /<td class="place">([^<]*)</.exec(row);
+    if (!place) continue;
+    const p = text(place[1]);
+    order.push({
+      place: /^\d+$/.test(p) ? +p : null,
+      status: /^\d+$/.test(p) ? "" : p, // 除外・中止・取消・失格など
+      num: num(/<td class="num">\s*(\d+)/.exec(row)?.[1]),
+      name: text(/<td class="horse">([\s\S]*?)<\/td>/.exec(row)?.[1] ?? ""),
+      pop: num(/<td class="pop">\s*(\d+)/.exec(row)?.[1]),
+      time: text(/<td class="time">([^<]*)</.exec(row)?.[1] ?? ""),
+      margin: text(/<td class="margin">([^<]*)</.exec(row)?.[1] ?? ""),
+    });
+  }
+  const payouts: Record<string, Payout[]> = {};
+  for (const key of BET_KEYS) {
+    const li = new RegExp(`<li class="${key}">([\\s\\S]*?)</li>`).exec(html)?.[1] ?? "";
+    payouts[key] = [...li.matchAll(/<div class="num">([^<]+)<\/div>\s*<div class="yen">([\d,]+)/g)].map(m => ({ combo: text(m[1]), yen: num(m[2]) ?? 0 }));
+  }
+  const cardCname = [...html.matchAll(/(pw01dde10\d{20}\/[0-9A-F]{2})/g)].map(m => m[1]).find(c => parseRaceCname(c)?.id === self?.id) ?? null;
+  // 同じ日・同じ競馬場の他のレース (1R〜12R)
+  const siblings = parseResultTop(html).filter(c => {
+    const o = parseRaceCname(c);
+    return o && self && o.id !== self.id && o.date === self.date && o.venue === self.venue;
+  });
+  return { cardCname, order, payouts, siblings };
+}
+
+/** 答え合わせ用に、予想に使う項目だけを残した出馬表 (保存量と、画面に送る量を 1/5 ほどにする) */
+export function compactCard(card: ReturnType<typeof parseCard>) {
+  const h = card.header;
+  return {
+    header: { name: h.name, grade: h.grade, distance: h.distance, surface: h.surface, postTime: h.postTime, cond: h.cond },
+    runners: card.runners.map(r => ({
+      waku: r.waku, num: r.num, name: r.name, odds: r.odds, pop: r.pop, scratched: r.scratched, color: r.color,
+      past: r.past.map(p => ({ place: p.place, field: p.field, grade: p.grade, diff: p.diff, distance: p.distance, surface: p.surface, corners: p.corners.slice(0, 1) })),
+    })),
+  };
 }

@@ -5,13 +5,14 @@
 // 人の操作は一切いらない。画面 (Pages) は D1 を読むだけで、予想の計算はブラウザ (Zig の Wasm) が行う。
 //   GET / … 取得の状態 (最終取得時刻・最後のエラー・件数) を JSON で返す (動作確認用)
 
-import { decodeSjis, parseTop, parseRaceList, parseCard } from "../../lib/jra.ts";
-import { plan, jst, type Meeting, type RaceDue } from "./plan.ts";
+import { decodeSjis, parseTop, parseRaceList, parseCard, parseResultTop, parseResult, parseRaceCname, compactCard } from "../../lib/jra.ts";
+import { plan, jst, type Meeting, type RaceDue, type ResultDue } from "./plan.ts";
 
 interface D1Stmt { bind(...v: unknown[]): D1Stmt; all<T = any>(): Promise<{ results: T[] }>; first<T = any>(): Promise<T | null>; run(): Promise<unknown> }
 interface Env { DB: { prepare(sql: string): D1Stmt; batch(s: D1Stmt[]): Promise<unknown> } }
 
 const BASE = "https://www.jra.go.jp";
+const HOUR_MS = 3_600_000;
 const UA = "KeibaVision/2.0 (+https://github.com/TatsuyaM2667/keiba-predictor)";
 
 async function get(path: string): Promise<Response> {
@@ -19,7 +20,20 @@ async function get(path: string): Promise<Response> {
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
   return res;
 }
-const page = async (cname: string) => decodeSjis(await (await get(`/JRADB/accessD.html?CNAME=${encodeURIComponent(cname)}`)).arrayBuffer());
+const page = async (cname: string, kind = "D") => decodeSjis(await (await get(`/JRADB/access${kind}.html?CNAME=${encodeURIComponent(cname)}`)).arrayBuffer());
+async function post(path: string, body: string) {
+  const res = await fetch(BASE + path, {
+    method: "POST", body, signal: AbortSignal.timeout(20_000),
+    headers: { "user-agent": UA, "content-type": "application/x-www-form-urlencoded" },
+  });
+  if (!res.ok) throw new Error(`${path} ${body}: HTTP ${res.status}`);
+  return decodeSjis(await res.arrayBuffer());
+}
+// 結果の一覧に載ったレースを、まだなければ追加する
+const addResult = (db: Env["DB"], cname: string) => {
+  const o = parseRaceCname(cname)!;
+  return db.prepare("INSERT INTO jra_results (id, date, venue, race_no, cname) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING").bind(o.id, o.date, o.venue, o.raceNo, cname);
+};
 
 const setState = (env: Env, key: string, value: string | number) =>
   env.DB.prepare("INSERT INTO jra_state (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2").bind(key, String(value)).run();
@@ -27,12 +41,14 @@ const setState = (env: Env, key: string, value: string | number) =>
 export async function tick(env: Env, now = Date.now()) {
   const db = env.DB;
   const today = jst(now).date;
-  const [state, meetings, races] = await Promise.all([
+  const [state, meetings, races, results] = await Promise.all([
     db.prepare("SELECT key, value FROM jra_state").all<{ key: string; value: string }>(),
     db.prepare("SELECT cname, date, fetched_at FROM jra_meetings WHERE date >= ?").bind(today).all<Meeting>(),
     db.prepare("SELECT id, cname, date, post_time, card_at FROM jra_races WHERE date >= ?").bind(today).all<RaceDue>(),
+    db.prepare(`SELECT id, date, cname, result_at, result IS NOT NULL AS has_result, card_cname, card_at, card IS NOT NULL AS has_card
+                FROM jra_results WHERE (result IS NULL OR card IS NULL) AND date >= date(?, '-90 days') ORDER BY date DESC LIMIT 300`).bind(today).all<ResultDue>(),
   ]);
-  const task = plan(now, Object.fromEntries(state.results.map(r => [r.key, r.value])), meetings.results, races.results);
+  const task = plan(now, Object.fromEntries(state.results.map(r => [r.key, r.value])), meetings.results, races.results, results.results);
   await setState(env, "last_tick", now);
   if (task.kind === "idle") return task;
   await setState(env, "last_task", JSON.stringify(task));
@@ -46,12 +62,7 @@ export async function tick(env: Env, now = Date.now()) {
       await setState(env, `sched:${task.month}`, now);
     } else if (task.kind === "top") {
       // 出馬表トップは POST で開く画面
-      const res = await fetch(`${BASE}/JRADB/accessD.html`, {
-        method: "POST", body: "cname=pw01dli00/F3", signal: AbortSignal.timeout(20_000),
-        headers: { "user-agent": UA, "content-type": "application/x-www-form-urlencoded" },
-      });
-      if (!res.ok) throw new Error(`top: HTTP ${res.status}`);
-      const list = parseTop(decodeSjis(await res.arrayBuffer()));
+      const list = parseTop(await post("/JRADB/accessD.html", "cname=pw01dli00/F3"));
       await db.batch([
         ...list.map(m => db.prepare("INSERT INTO jra_meetings (cname, date, venue, label) VALUES (?, ?, ?, ?) ON CONFLICT(cname) DO NOTHING").bind(m.cname, m.date, m.venue, m.label)),
         // 10 日より前のデータは消す (容量を増やし続けないため)
@@ -70,10 +81,37 @@ export async function tick(env: Env, now = Date.now()) {
         ).bind(r.id, r.date, r.venue, r.raceNo, r.postTime, r.name, r.grade, r.cond, r.surface, r.distance, r.field, r.cname)),
         db.prepare("UPDATE jra_meetings SET fetched_at = ? WHERE cname = ?").bind(now, task.cname),
       ]);
-    } else {
+    } else if (task.kind === "card") {
       const card = parseCard(await page(task.cname));
       if (!card.runners.length) throw new Error(`${task.cname}: 出走馬が見つかりません (ページの形式が変わった可能性)`);
       await db.prepare("UPDATE jra_races SET card = ?, card_at = ? WHERE id = ?").bind(JSON.stringify(card), now, task.id).run();
+    } else if (task.kind === "results_top") {
+      const list = parseResultTop(await post("/JRADB/accessS.html", "cname=pw01sli00/AF"));
+      if (!list.length) throw new Error("結果一覧: レースが見つかりません (ページの形式が変わった可能性)");
+      await db.batch(list.map(c => addResult(db, c)));
+      await setState(env, "results_top", now);
+    } else if (task.kind === "result") {
+      const html = await page(task.cname, "S");
+      const r = parseResult(html, task.cname);
+      if (!r.order.length || !r.payouts.win.length) throw new Error(`${task.cname}: 着順が見つかりません (まだ確定していない可能性)`);
+      const head = parseCard(html).header;
+      const self = parseRaceCname(task.cname)!;
+      await db.batch([
+        db.prepare("UPDATE jra_results SET name = ?, grade = ?, result = ?, result_at = ?, card_cname = ? WHERE id = ?")
+          .bind(head.name, head.grade, JSON.stringify({ order: r.order, payouts: r.payouts }), now, r.cardCname, task.id),
+        // 今週取り込んだ出馬表 (発走後の確定オッズ) があれば、それを使う (JRA にもう一度取りに行かない)
+        db.prepare("UPDATE jra_results SET card = (SELECT card FROM jra_races WHERE id = ?1), card_at = ?2 WHERE id = ?1 AND EXISTS (SELECT 1 FROM jra_races WHERE id = ?1 AND card IS NOT NULL)")
+          .bind(task.id, now),
+        // 最近 (7 日以内) の開催は、同じ日の全レースの結果も集める
+        ...(self.date >= jst(now - 7 * 24 * HOUR_MS).date ? r.siblings.map(c => addResult(db, c)) : []),
+      ]);
+      // jra_races の出馬表は詳しい形のままなので、ここで絞った形に置き換える
+      const copied = await db.prepare("SELECT card FROM jra_results WHERE id = ?").bind(task.id).first<{ card: string | null }>();
+      if (copied?.card) await db.prepare("UPDATE jra_results SET card = ? WHERE id = ?").bind(JSON.stringify(compactCard(JSON.parse(copied.card))), task.id).run();
+    } else if (task.kind === "result_card") {
+      const card = parseCard(await page(task.cname));
+      if (!card.runners.length) throw new Error(`${task.cname}: 出走馬が見つかりません`);
+      await db.prepare("UPDATE jra_results SET card = ?, card_at = ? WHERE id = ?").bind(JSON.stringify(compactCard(card)), now, task.id).run();
     }
     await setState(env, "last_ok", now);
   } catch (e) {
@@ -85,6 +123,9 @@ export async function tick(env: Env, now = Date.now()) {
     if (task.kind === "top") await setState(env, "top", now);
     if (task.kind === "meeting") await db.prepare("UPDATE jra_meetings SET fetched_at = ? WHERE cname = ?").bind(now, task.cname).run();
     if (task.kind === "card") await db.prepare("UPDATE jra_races SET card_at = ? WHERE id = ?").bind(now, task.id).run();
+    if (task.kind === "results_top") await setState(env, "results_top", now);
+    if (task.kind === "result") await db.prepare("UPDATE jra_results SET result_at = ? WHERE id = ?").bind(now, task.id).run();
+    if (task.kind === "result_card") await db.prepare("UPDATE jra_results SET card_at = ? WHERE id = ?").bind(now, task.id).run();
   }
   return task;
 }
@@ -95,7 +136,7 @@ export default {
   },
   async fetch(_req: Request, env: Env) {
     const state = await env.DB.prepare("SELECT key, value FROM jra_state").all<{ key: string; value: string }>();
-    const counts = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM jra_meetings) AS meetings, (SELECT COUNT(*) FROM jra_races) AS races, (SELECT COUNT(*) FROM jra_races WHERE card IS NOT NULL) AS cards").first();
+    const counts = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM jra_meetings) AS meetings, (SELECT COUNT(*) FROM jra_races) AS races, (SELECT COUNT(*) FROM jra_races WHERE card IS NOT NULL) AS cards, (SELECT COUNT(*) FROM jra_results) AS results, (SELECT COUNT(*) FROM jra_results WHERE result IS NOT NULL AND card IS NOT NULL) AS checked").first();
     return Response.json({ state: Object.fromEntries(state.results.map(r => [r.key, r.value])), counts });
   },
 };

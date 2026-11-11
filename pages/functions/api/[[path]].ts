@@ -293,6 +293,19 @@ async function liveApi(path: string, q: URLSearchParams, env: Env): Promise<Resp
     return json({ ...r, venueName: VENUE_NAMES[r.venue] ?? r.venue, card: r.card ? JSON.parse(r.card) : null }, 200, 60);
   }
 
+  if (path === "live/results") {
+    // 予想の答え合わせ用: 結果と出馬表がそろった過去のレース (新しい順)。
+    // 保存してある JSON は解析せずにそのままつなげる (Functions の CPU 時間の上限を超えないため)
+    const rows = await db.prepare(
+      `SELECT id, date, venue, race_no, name, grade, result, card FROM jra_results
+       WHERE result IS NOT NULL AND card IS NOT NULL ORDER BY date DESC, venue, race_no LIMIT ?`
+    ).bind(Math.min(500, Math.max(1, int(q.get("limit"), 300)))).all<any>();
+    const body = `[${rows.results.map(r =>
+      `{"id":${JSON.stringify(r.id)},"date":${JSON.stringify(r.date)},"venueName":${JSON.stringify(VENUE_NAMES[r.venue] ?? r.venue)},"race_no":${Number(r.race_no)},"name":${JSON.stringify(r.name)},"grade":${JSON.stringify(r.grade)},"result":${r.result},"card":${r.card}}`
+    ).join(",")}]`;
+    return new Response(body, { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=600" } });
+  }
+
   if (path === "live/status") {
     const rows = await db.prepare("SELECT key, value FROM jra_state WHERE key IN ('last_tick', 'last_ok', 'last_error', 'top')").all<{ key: string; value: string }>();
     return json(Object.fromEntries(rows.results.map(r => [r.key, r.value])), 200, 30);

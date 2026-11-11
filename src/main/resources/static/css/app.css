@@ -2488,3 +2488,731 @@ button.chip {
 button.chip:hover {
     background: var(--accent-soft);
 }
+
+/* ============ 予想の見解・予想ゲーム・予想の成績・はじめての競馬 ============ */
+/* グラフの系列色 (検証済み: 色覚の違いがあっても見分けられる 3 色。ダークモードは別の段階の色) */
+:root {
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+    --plus: #0a6b45;
+    --minus: #c4302b;
+}
+:root[data-theme="dark"] {
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --plus: #3dbb84;
+    --minus: #ff6b61;
+}
+.plus {
+    color: var(--plus);
+    font-weight: 600;
+}
+.minus {
+    color: var(--minus);
+}
+.lead {
+    font-size: 15px;
+    line-height: 1.8;
+    margin-bottom: 18px;
+    max-width: 72ch;
+}
+.sub-title {
+    font: 600 15px var(--serif);
+    margin: 20px 0 8px;
+}
+.note {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+.note svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    margin-top: 2px;
+}
+.note.warn {
+    color: var(--warn);
+}
+.mark {
+    font-weight: 700;
+}
+.mark.m1 {
+    color: var(--danger);
+}
+.mark.m2 {
+    color: var(--g1);
+}
+.mark.m3 {
+    color: var(--warn);
+}
+.mark.m4 {
+    color: var(--ink-3);
+}
+
+/* 予想の見解 */
+#outlook {
+    margin-bottom: 16px;
+}
+.outlook-pace {
+    font-size: 14px;
+    line-height: 1.8;
+    margin-bottom: 12px;
+}
+.outlook-picks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+}
+.pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    padding: 12px 14px;
+    border-radius: var(--radius-s);
+    background: var(--bg-sunken);
+}
+.pick .mark {
+    font-size: 20px;
+    width: 22px;
+}
+.pick .muted {
+    margin-left: auto;
+    font-size: 12px;
+}
+.pick ul {
+    flex-basis: 100%;
+    margin: 4px 0 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--ink-2);
+}
+#plan-table tr.best td {
+    background: var(--accent-soft);
+}
+#plan-table .combos {
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+#plan-table .combos small {
+    color: var(--ink-3);
+}
+
+/* 予想ゲーム (3D の右パネル) */
+.game {
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+}
+.game.locked .bet-types,
+.game.locked .bet-horses,
+.game.locked .bet-line {
+    opacity: 0.45;
+    pointer-events: none;
+}
+.bet-types {
+    flex-wrap: wrap;
+    margin: 8px 0 4px;
+}
+.bet-horses {
+    display: grid;
+    gap: 4px;
+    margin: 6px 0;
+    max-height: 260px;
+    overflow-y: auto;
+}
+.bet-horses button {
+    display: grid;
+    grid-template-columns: 24px 1fr auto 18px auto;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--bg-sunken);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+.bet-horses button:hover:not(:disabled) {
+    background: var(--accent-soft);
+}
+.bet-horses button.on {
+    box-shadow: inset 0 0 0 2px var(--accent);
+    background: var(--accent-soft);
+}
+.bet-horses button:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+.bet-horses .nm {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.bet-horses .od {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.bet-horses .mk {
+    font-weight: 700;
+    text-align: center;
+}
+.bet-horses .mk.m1 {
+    color: var(--danger);
+}
+.bet-horses .mk.m2 {
+    color: var(--g1);
+}
+.bet-horses .mk.m3 {
+    color: var(--warn);
+}
+.bet-horses .ord {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+}
+.bet-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+.bet-pick {
+    flex: 1 1 100%;
+}
+.bet-amount {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.bet-amount input {
+    width: 96px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-elev);
+    color: var(--ink);
+    font: inherit;
+    text-align: right;
+}
+.bet-slip {
+    list-style: none;
+    margin: 8px 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+}
+.bet-slip li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: var(--bg-sunken);
+}
+.bet-slip li .num {
+    margin-left: auto;
+}
+.bet-slip button {
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+    display: grid;
+    padding: 2px;
+}
+.bet-slip svg {
+    width: 14px;
+    height: 14px;
+}
+.game-result {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+.game-result h3 {
+    font: 700 18px var(--serif);
+    margin-bottom: 6px;
+}
+.game-tickets {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px;
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+}
+.game-tickets li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-3);
+}
+.game-tickets li.hit {
+    color: var(--ink);
+    font-weight: 600;
+}
+.game-tickets li .num {
+    margin-left: auto;
+}
+.game-tickets svg {
+    width: 16px;
+    height: 16px;
+}
+.game-tickets li.hit svg {
+    color: var(--plus);
+}
+.game-hint {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 10px;
+}
+.game-hint svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* 予想の成績 */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.stat-grid .stat {
+    border-radius: var(--radius);
+}
+.stat-grid .stat .label {
+    display: block;
+    margin-bottom: 4px;
+}
+.stat-grid .stat .fine {
+    display: block;
+    margin-top: 4px;
+}
+.res-chart {
+    margin-top: 16px;
+}
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 13px;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+}
+.legend span,
+.tip span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.sw {
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+}
+.sw.s1 {
+    background: var(--s1);
+}
+.sw.s2 {
+    background: var(--s2);
+}
+.sw.s3 {
+    background: var(--s3);
+}
+.chart-box {
+    position: relative;
+}
+/* アイコン用の全体の svg 指定 (線で描く) を、グラフと図では打ち消す */
+.chart-box svg,
+.lfig svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    overflow: visible;
+    stroke: none;
+    stroke-width: 1;
+}
+.chart-box svg {
+    font-size: 11px;
+}
+.chart-box .grid {
+    stroke: var(--line);
+}
+.chart-box .zero {
+    stroke: var(--line-strong);
+}
+.chart-box .axis,
+.chart-box .end {
+    font: 11px var(--num);
+    fill: var(--ink-3);
+}
+.chart-box .end {
+    fill: var(--ink-2);
+}
+.chart-box .line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+.chart-box .line.s1 {
+    stroke: var(--s1);
+}
+.chart-box .line.s2 {
+    stroke: var(--s2);
+}
+.chart-box .line.s3 {
+    stroke: var(--s3);
+}
+.chart-box .cross {
+    stroke: var(--ink-4);
+    stroke-dasharray: 3 3;
+}
+.chart-box .hit {
+    fill: transparent;
+    cursor: crosshair;
+}
+.tip {
+    position: absolute;
+    top: 0;
+    display: grid;
+    gap: 3px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--bg-elev);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--line);
+    font-size: 12px;
+    pointer-events: none;
+    max-width: 260px;
+}
+
+/* はじめての競馬 */
+.learn {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+.learn-toc {
+    position: sticky;
+    top: 16px;
+    padding: 16px;
+}
+.learn-toc .bar {
+    margin: 6px 0 12px;
+}
+.learn-toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+}
+.learn-toc button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.learn-toc button:hover {
+    background: var(--bg-sunken);
+}
+.learn-toc button.on {
+    background: var(--accent-soft);
+    color: var(--ink);
+    font-weight: 600;
+}
+.learn-toc .n {
+    width: 18px;
+    text-align: center;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+.learn-toc svg {
+    width: 18px;
+    height: 18px;
+}
+.learn-toc svg.ok {
+    color: var(--plus);
+}
+.lesson {
+    line-height: 1.9;
+}
+.lesson h2 {
+    font: 700 26px/1.3 var(--serif);
+    margin: 4px 0 14px;
+}
+.lesson h4 {
+    font: 600 16px var(--serif);
+    margin: 18px 0 6px;
+}
+.lesson p,
+.lesson ul {
+    margin: 0 0 12px;
+    font-size: 15px;
+}
+.lesson ul {
+    padding-left: 20px;
+}
+.lfig {
+    margin: 16px 0;
+    padding: 16px;
+    border-radius: var(--radius-s);
+    background: var(--bg-sunken);
+}
+.lfig figcaption {
+    font-size: 12px;
+    color: var(--ink-3);
+    margin-top: 10px;
+    line-height: 1.6;
+}
+.lfig svg {
+    width: 100%;
+    height: auto;
+}
+.lfig .track {
+    fill: var(--accent-soft);
+    stroke: var(--line-strong);
+}
+.lfig .goal {
+    stroke: var(--danger);
+    stroke-width: 3;
+}
+.lfig .horse-dot {
+    fill: var(--accent);
+}
+.lfig .t-label {
+    font: 600 14px var(--serif);
+    fill: var(--ink);
+}
+.lfig .t-small {
+    font: 11px sans-serif;
+    fill: var(--ink-3);
+}
+.lcard-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: stretch;
+    font-size: 14px;
+}
+.lcard-row .c {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 10px 12px 10px 14px;
+    border-radius: 10px;
+    background: var(--bg-elev);
+    box-shadow: 0 0 0 1px var(--line);
+}
+.lcard-row .c::before {
+    content: attr(data-n);
+    position: absolute;
+    top: -8px;
+    left: -6px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font: 600 11px/18px var(--num);
+    text-align: center;
+}
+.lcard-row small {
+    font-size: 11px;
+    color: var(--ink-3);
+}
+.lcard-legend {
+    margin: 14px 0 0;
+    padding-left: 22px;
+    font-size: 13px;
+    line-height: 1.8;
+}
+.ladder {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin: 10px 0 16px;
+    font-size: 13px;
+}
+.ladder span {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) calc(var(--i) * 10%), var(--bg-sunken));
+    color: var(--ink);
+}
+.ladder span:nth-of-type(n + 7) {
+    color: var(--accent-ink);
+}
+.ladder svg {
+    width: 12px;
+    height: 12px;
+    color: var(--ink-4);
+}
+.bet-table .slots {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    white-space: nowrap;
+}
+.slot {
+    position: relative;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    background: var(--bg-elev);
+    color: var(--ink-4);
+    box-shadow: 0 0 0 1px var(--line);
+}
+.slot.on {
+    background: var(--accent);
+    color: var(--accent-ink);
+    box-shadow: none;
+}
+.slot i svg {
+    width: 10px;
+    height: 10px;
+}
+.bet-table small {
+    color: var(--ink-3);
+    margin-left: 4px;
+}
+.pool-bar {
+    display: flex;
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+}
+.pool-bar span {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+}
+.pool-bar small {
+    font-weight: 400;
+    font-size: 11px;
+}
+.pool-bar .keep {
+    background: var(--ink-4);
+    color: var(--bg-elev);
+}
+.pool-bar .back {
+    background: var(--accent);
+    color: var(--accent-ink);
+}
+.pool-eq {
+    margin: 12px 0 0;
+    font-size: 13px;
+    line-height: 1.8;
+}
+.tour {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    margin: 12px 0;
+}
+.tour a {
+    display: grid;
+    gap: 4px;
+    padding: 14px;
+    color: var(--ink);
+    text-decoration: none;
+    line-height: 1.5;
+}
+.tour a:hover {
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+.tour svg {
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+}
+.tour span {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.quiz {
+    display: grid;
+    gap: 12px;
+    margin-top: 20px;
+}
+.quiz .q {
+    padding: 14px 16px;
+    border-radius: var(--radius-s);
+    background: var(--bg-sunken);
+}
+.quiz .q p {
+    margin: 0 0 8px;
+}
+.quiz .opts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.quiz .btn.right {
+    box-shadow: inset 0 0 0 2px var(--plus);
+    color: var(--plus);
+}
+.quiz .btn.wrong {
+    box-shadow: inset 0 0 0 2px var(--minus);
+    color: var(--minus);
+}
+.quiz .why {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    margin: 10px 0 0;
+    font-size: 14px;
+}
+.quiz .why svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    margin-top: 3px;
+}
+.quiz .why.ok svg {
+    color: var(--plus);
+}
+.quiz .why.ng svg {
+    color: var(--minus);
+}
+.lesson-nav {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+}
+@media (max-width: 860px) {
+    .learn {
+        grid-template-columns: 1fr;
+    }
+    .learn-toc {
+        position: static;
+    }
+}
